@@ -1,0 +1,7 @@
+[package]
+name = "apppw-windows"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+windows = "0.62.2"
