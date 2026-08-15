@@ -1,5 +1,8 @@
-use std::{net::{IpAddr, SocketAddr}, path::PathBuf};
 use std::fmt;
+use std::{
+    net::{IpAddr, SocketAddr},
+    path::PathBuf,
+};
 
 use serde::{Deserialize, Serialize};
 

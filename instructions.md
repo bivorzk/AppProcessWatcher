@@ -1,14 +1,12 @@
-# AppWatch – Windows alkalmazásonkénti hálózati és HTTP forgalomfigyelő
+# AppWatch - junior szintű projektleírás
 
-## Asztali rendszerprogramozási és hálózatkezelési projekt
+## Mit készítesz?
 
-### Rust nyelven
+Egy Windowsos Rust alkalmazást készítesz, amely megmutatja, hogy egy futó program milyen hálózati forgalmat használ. Például kiválaszthatod a `Discord.exe` vagy a `Steam.exe` folyamatot, és megnézheted a kapcsolatait, a küldött/fogadott adatmennyiséget, valamint ahol ez valóban lehetséges, a HTTP-kéréseit.
 
-A projekt célja egy Windows operációs rendszerre készülő asztali alkalmazás létrehozása, amely képes a futó alkalmazások hálózati kapcsolatainak megfigyelésére, valamint támogatott esetben az alkalmazások által küldött HTTP és HTTPS kérések megjelenítésére.
+Nem kell minden adatot minden esetben felismerni. Ha egy adat nem állapítható meg biztosan, használd a megadott `None` vagy `Unknown` értéket. Ne találj ki PID-et, hostnevet vagy HTTP-kérést.
 
-A kész alkalmazásban a felhasználó kiválaszthat például egy `Discord.exe`, `Steam.exe`, böngésző vagy játék folyamatot, majd megtekintheti annak hálózati aktivitását.
-
-A programnak különbséget kell tennie:
+A programnak tudnia kell megkülönböztetni:
 
 - TCP kapcsolat,
 - UDP kapcsolat,
@@ -18,9 +16,13 @@ A programnak különbséget kell tennie:
 - QUIC forgalom,
 - ismeretlen vagy egyedi protokoll
 
-között.
+értékeket.
 
-A projekt megoldásának megkezdéséhez hozzon létre egy Rust workspace-t `AppWatch` néven!
+## Mielőtt elkezded
+
+Haladj sorrendben. Először az adatmodelleket és a folyamatlistát készítsd el, utána a csomagfigyelést, végül a proxy, adatbázis és felület részeit. Minden nagyobb lépés után futtasd a `cargo check` parancsot.
+
+Hozz létre egy Rust workspace-t `AppWatch` néven:
 
 A projekt ajánlott könyvtár- és fájlszerkezete:
 
@@ -36,7 +38,7 @@ AppWatch/
     └── apppw-ui/
 ```
 
-Az `AppWatch/` és a `crates/` könyvtárak, a gyökérben lévő `Cargo.toml` pedig fájl. Minden `apppw-*` elem egy külön crate könyvtára, saját `Cargo.toml` fájllal és `src/` könyvtárral.
+Az `AppWatch/` és a `crates/` könyvtár. A gyökérben lévő `Cargo.toml` egy fájl. Minden `apppw-*` mappa külön Rust crate: saját `Cargo.toml` és `src/` mappája van.
 
 A gyökérben lévő `Cargo.toml` workspace-manifest legyen, ne külön futtatható Rust package. Minimális tartalma:
 
@@ -46,26 +48,35 @@ resolver = "3"
 members = ["crates/*"]
 ```
 
-Az `apppw-core`, `apppw-windows`, `apppw-capture`, `apppw-proxy` és `apppw-storage` library crate legyen `src/lib.rs` belépési fájllal. Az `apppw-ui` binary crate legyen `src/main.rs` belépési fájllal.
+Az `apppw-core`, `apppw-windows`, `apppw-capture`, `apppw-proxy` és `apppw-storage` library crate, ezért a belépési fájljuk `src/lib.rs`. Az `apppw-ui` futtatható program, ezért a belépési fájlja `src/main.rs`.
 
-## Hogyan kell értelmezni a feladatokat?
+## Egyszerű haladási terv
 
-Ez a rövid útmutató főleg akkor hasznos, ha Java után most kezd Rusttal foglalkozni.
+1. **Alapok (1-3. feladat):** Készítsd el az adatmodelleket: protokoll, folyamat, kapcsolat és címformázás.
+2. **Windows adatok (4. és 6. feladat):** Listázd a folyamatokat, majd próbáld a socketeket folyamatokhoz kötni.
+3. **Csomagok és kapcsolatok (5., 7-9. feladat):** Figyeld a TCP/UDP csomagokat, alakítsd őket eseménnyé, és számold a kapcsolat forgalmát.
+4. **HTTP adatok (10-14. feladat):** Írd le a HTTP-kérések modelljét, takard ki a titkos headereket, majd készíts proxyt és korrelációt.
+5. **Mentés és felület (15-23. feladat):** Ments SQLite-ba, készíts listát, szűrést, részletező nézetet, sessionöket és JSON exportot.
+6. **Összekötés (24. feladat):** Indítsd el és állítsd le rendezetten az összes komponenst.
 
-- A `crate` egy külön fordítható Rust-projekt, nagyjából egy Maven- vagy Gradle-modulhoz hasonló.
-- Nagyobb megoldásnál a kód külön modulfájlokba is kerülhet, például `src/process.rs` fájlba. Ezt a modult a `lib.rs` fájlban deklarálni és szükség esetén publikusan exportálni kell.
-- A Rust `struct` nagyjából egy csak adatokat tároló Java-osztálynak felel meg. A metódusai külön `impl TípusNév` blokkba kerülnek.
-- Az `enum` Rustban több adatot is hordozhat. Emiatt a Java `enum` és egy egyszerű sealed class használatához is hasonlíthat.
-- A `trait` egy Java interface-hez hasonló szerződés. A `#[derive(...)]` bizonyos trait-ek implementációját automatikusan elkészíti.
-- Az `Option<T>` azt jelenti, hogy az érték lehet `Some(value)` vagy hiányozhat, ekkor `None`.
-- A `Result<T, E>` siker esetén `Ok(value)`, hiba esetén `Err(error)` értéket tartalmaz. A dokumentumban szereplő rövid `Result<T>` alak használatához válasszon konkrét hibatípust vagy egy olyan aliast, mint az `anyhow::Result<T>`.
-- A `Vec<T>` egy növelhető lista, nagyjából a Java `ArrayList<T>` megfelelője.
-- A `String` birtokolt, módosítható szöveg. A `&str` egy kölcsönzött szövegrészlet.
-- A `Self` az aktuálisan implementált típust jelenti.
-- A `&self` egy már létező példány kölcsönzött elérését jelenti, hasonlóan ahhoz, amikor Java metódusban a `this` mezőit olvassa.
-- A kódmintákban szereplő `...` csak kihagyott rész jelölése, nem másolható be Rust-kódba.
+Az alábbi részletes feladatleírás a pontos típusneveket, mezőket és elvárt működést tartalmazza. Ezeket tartsd meg akkor is, ha a saját kódodat több kisebb modulra bontod.
 
-A feladatokban név szerint kért, más crate-ek által használt típusok és függvények legyenek publikusak (`pub`). Az adatmodellek felsorolt mezői ennél a tanulóprojektnél szintén lehetnek `pub` mezők; getterek készítése nem kötelező. Más crate típusának használatakor vegye fel azt path dependencyként a használó crate `Cargo.toml` fájljába, például:
+## Fontos Rust fogalmak
+
+Ez a rövid útmutató akkor is elég, ha Java után most ismerkedsz Rusttal.
+
+- A `crate` egy külön fordítható Rust-projekt. Java esetén nagyjából egy Maven- vagy Gradle-modulnak felel meg.
+- A `struct` adatokat tárol, hasonló egy egyszerű Java-osztályhoz. A hozzá tartozó metódusok az `impl TípusNév` blokkba kerülnek.
+- Az `enum` többféle állapotot tud leírni, és szükség esetén adatot is tárolhat.
+- A `trait` egy szabály vagy szerződés, Java esetén interface-hez hasonlítható. A `#[derive(...)]` több trait implementációját automatikusan elkészíti.
+- Az `Option<T>` azt jelenti, hogy lehet érték (`Some(value)`), de hiányozhat is (`None`).
+- A `Result<T, E>` siker esetén `Ok(value)`, hiba esetén `Err(error)`. Ha rövid `Result<T>` alakot használsz, válassz konkrét hibát vagy például `anyhow::Result<T>` aliast.
+- A `Vec<T>` egy bővíthető lista, Java esetén `ArrayList<T>`.
+- A `String` saját tulajdonú szöveg, a `&str` egy szövegre mutató kölcsönzött nézet.
+- A `Self` az éppen megvalósított típust, a `&self` pedig egy létező példány elérését jelenti.
+- A mintákban lévő `...` csak kihagyott kódrészletet jelez; ne másold be Rust-kódba.
+
+A feladatban név szerint kért és más crate-ekből használt típusok, függvények legyenek `pub` értékűek. Ennél a tanulóprojektnél a felsorolt modellmezők is lehetnek `pub` mezők, gettereket nem kell írnod. Ha egy crate egy másik crate típusát használja, add hozzá path dependencyként a használó crate `Cargo.toml` fájljához:
 
 ```toml
 [dependencies]
@@ -92,11 +103,11 @@ tracing-subscriber
 anyhow (opcionális)
 ```
 
-# Külső crate-ek – kezdő gyorstalpaló
+# Külső crate-ek - kezdő gyorstalpaló
 
-Az alábbi példák egymástól független, kisméretű minták. Azt mutatják meg, hogyan kell elkezdeni az adott crate használatát; nem helyettesítik a teljes feladatmegoldást.
+Az alábbi rövid példák megmutatják, hogyan indíthatod el az adott crate használatát. Nem teljes megoldások, csak kiindulópontok.
 
-Fontos: a dependency mindig annak a crate-nek a `Cargo.toml` fájljába kerüljön, amely közvetlenül használja. Ne tegyen minden dependencyt automatikusan a workspace gyökér-manifestjébe.
+Fontos: egy dependency mindig abba a crate-be kerüljön, amelyik közvetlenül használja. Ne tedd automatikusan az összeset a workspace gyökér-manifestjébe.
 
 ## `serde` – Rust-értékek menthető formára alakítása
 
@@ -575,13 +586,40 @@ Dokumentáció: [`anyhow`](https://docs.rs/anyhow/latest/anyhow/).
 
 ---
 
+# Feladatok junior nyelven
+
+Az alábbi lista azt mondja el egyszerűen, mi a célja az egyes feladatoknak. A közvetlenül utána következő részben találod a pontos mezőket, típusneveket és függvényaláírásokat. A pontos neveket ne változtasd meg.
+
+1. **Protokollok:** Készíts két `enum` típust: az egyik a hálózati protokollt, a másik a forgalom irányát írja le. Tedd őket menthetővé Serde-del.
+2. **Folyamatmodell:** Készíts egy `ProcessInfo` adatmodellt PID-del, névvel és opcionális programútvonallal. A `Display` alakja legyen könnyen olvasható.
+3. **Kapcsolatmodell:** Írd le egy hálózati kapcsolat helyi és távoli végpontját, folyamatát és számlálóit. IPv6 címnél is helyes `cím:port` formátumot használj.
+4. **Folyamatlista:** A Windows API-val olvasd ki a futó programokat. Egyetlen elérhetetlen folyamat ne állítsa le a teljes listázást.
+5. **Csomagfigyelés:** WinDiverttel külön háttérszálon figyeld a TCP és UDP csomagokat. A csomagokat alapból csak figyeld, ne módosítsd.
+6. **PID hozzárendelés:** A Windows socket táblák alapján próbáld a kapcsolatot egy folyamathoz kötni. Bizonytalan UDP találat esetén eredmény `None`.
+7. **Események és követés:** Hozz létre eseményt a csomagokról és kapcsolatokról. Azonos 5-tuple-höz tartozó csomagokat ugyanahhoz a logikai kapcsolathoz tartsd.
+8. **Kapcsolat állapota:** Új kapcsolatnál nyitási, változásnál frissítési, régi/inaktív kapcsolatnál lezárási eseményt küldj. A két irány bájtjai ugyanahhoz a kapcsolathoz kerüljenek.
+9. **Csomagmodell:** Tárold a csomag időpontját, irányát, címeit, portjait, méretét és opcionális folyamatát. A nyers adat tárolása legyen kikapcsolva alapból.
+10. **HTTP modell:** Készíts típusokat HTTP-kéréshez és headerhez. A kérés és válasz méretét akkor is mentsd, ha a body tartalmát nem őrzöd meg.
+11. **Titkok takarása:** Másolat készítése közben rejtsd el a jelszószerű HTTP headereket. A headernév kis- és nagybetűje ne számítson.
+12. **HTTP proxy:** Indíts helyi proxyt, amely fogadja, továbbítja és rögzíti a HTTP kérést és választ. A proxyhiba legyen valódi hiba, ne sikeres válasz.
+13. **HTTPS proxy:** Csak a felhasználó által proxyra beállított és a helyi tanúsítványt elfogadó alkalmazások HTTPS forgalmát dekódold. Certificate pinninget ne kerülj meg.
+14. **Adatok összekapcsolása:** Próbáld a csomagot, a socket/PID adatot és a proxykérést biztonságosan összekötni. Csak egyértelmű találatot fogadj el.
+15. **Adatbázis:** SQLite-ba ments folyamatokat, kapcsolatokat és HTTP-kéréseket. Hibánál adj vissza `Result` értéket, ne használj `unwrap()`-ot.
+16. **Folyamatlista a felületen:** Egui felületen válassz ki egy folyamatot, vagy jeleníts meg minden folyamatot.
+17. **Hálózati lista:** Mutasd táblázatban a fontos hálózati és HTTP adatokat. A háttérből érkező események ne állítsák meg a felületet.
+18. **Részletező nézet:** Kérés kiválasztásakor jelenítsd meg a headereket, body-kat, időzítést és kapcsolatot. A header maszkolásához a közös függvényt használd.
+19. **Szűrés:** Támogasd a megadott `kulcs:érték` kereséseket és az egyszerre több feltételt. Hibás keresésnél írj ki érthető üzenetet, ne álljon le a program.
+20. **Jelölések:** A felület különböztesse meg a HTTP-t, dekódolt HTTPS-t, titkosított TLS-t, TCP-t, UDP-t, QUIC-ot és ismeretlen forgalmat.
+21. **Statisztikák:** A kiválasztott folyamatra vagy az összesre számold a kapcsolatokat, csomagokat, adatforgalmat, hostokat és átlagos HTTP választ.
+22. **Sessionök:** A felhasználó indíthasson, állíthasson le és üríthessen rögzítést. A korábbi mentett rekord csak külön, megerősített törléssel törölhető.
+23. **JSON export:** Exportáld a session fontos adatait JSON-ba. Érzékeny HTTP header ne jelenjen meg eredeti értékkel.
+24. **Teljes alkalmazás:** Indítsd el, kösd össze, majd bezáráskor rendezetten állítsd le az összes komponenst. Ne használj globális, módosítható állapotot.
+
+---
+
 # 1.) feladat [2 pont]
 
-Az `apppw-core/src/lib.rs` fájlban hozzon létre egy új, publikus `enum` típust `NetworkProtocol` néven!
-
-Ez azt jelenti, hogy a deklaráció `pub enum NetworkProtocol` formában kezdődjön.
-
-Az enumeráció az alábbi változatokat tartalmazza:
+Az `apppw-core/src/lib.rs` fájlban készíts egy publikus `NetworkProtocol` enumot. A deklaráció kezdete legyen `pub enum NetworkProtocol`, és az alábbi értékeket tartalmazza:
 
 ```rust
 TCP
@@ -593,16 +631,14 @@ QUIC
 UNKNOWN
 ```
 
-Ugyanebben a crate-ben hozzon létre egy másik `enum` típust `ConnectionDirection` néven!
-
-Az enumeráció az alábbi változatokat tartalmazza:
+Ugyanitt készíts egy publikus `ConnectionDirection` enumot is ezekkel az értékekkel:
 
 ```rust
 Inbound
 Outbound
 ```
 
-Mindkét enumeráció valósítsa meg vagy származtassa automatikusan az alábbi trait-eket:
+Mindkét enum kapja meg `derive`-dal ezeket a trait-eket:
 
 ```rust
 Debug
@@ -614,19 +650,15 @@ Serialize
 Deserialize
 ```
 
-A `Serialize` és `Deserialize` derive használatához adja hozzá a `serde` crate-et az `apppw-core/Cargo.toml` fájlhoz a `derive` feature-rel, majd importálja a két trait-et a Rust-forrásban.
+A `Serialize` és `Deserialize` miatt add hozzá a `serde` crate-et az `apppw-core/Cargo.toml` fájlhoz `derive` feature-rel, majd importáld a két trait-et a forrásban.
 
 ---
 
 # 2.) feladat [2 pont]
 
-Az `apppw-core/src/lib.rs` fájlban hozzon létre egy `ProcessInfo` nevű Rust `struct` típust.
+Az `apppw-core/src/lib.rs` fájlban készíts egy publikus `ProcessInfo` structot. Ez egy folyamat adatait tartja. Használj `impl ProcessInfo` blokkot a metódusaihoz.
 
-Java nyelven ezt valószínűleg egy egyszerű adatokat tároló osztályként készítené el. Rustban ehhez egy `struct`, valamint a hozzá tartozó metódusokhoz egy `impl ProcessInfo` blokk szükséges.
-
-A típus legyen publikus, vagyis a deklarációja `pub struct ProcessInfo` formában kezdődjön. Így más crate-ek, például az `apppw-windows`, is használhatják.
-
-A `ProcessInfo` az alábbi három mezőt tartalmazza:
+A struct mezői legyenek:
 
 ```rust
 pid: u32
@@ -634,15 +666,13 @@ name: String
 executable_path: Option<PathBuf>
 ```
 
-- `pid`: a folyamat számszerű azonosítója;
+- `pid`: a folyamat azonosítója;
 - `name`: a folyamat neve, például `Discord.exe`;
-- `executable_path`: a futtatható fájl elérési útja. Az `Option<PathBuf>` azt jelenti, hogy az útvonal vagy ismert (`Some(path)`), vagy nem ismert (`None`).
+- `executable_path`: a futtatható fájl útvonala, vagy `None`, ha az nem olvasható ki.
 
 ## Konstruktor
 
-Rustban nincs a Javából ismert, osztály nevével megegyező konstruktor. Helyette készítsen egy publikus, társított `new` függvényt az `impl ProcessInfo` blokkon belül.
-
-A függvény aláírása legyen:
+Készíts az `impl ProcessInfo` blokkban egy publikus `new` függvényt ezzel az aláírással:
 
 ```rust
 pub fn new(
@@ -652,7 +682,7 @@ pub fn new(
 ) -> Self
 ```
 
-A `new` hozzon létre és adjon vissza egy `ProcessInfo` értéket. Mindhárom paramétert mentse a vele azonos nevű mezőbe.
+A `new` adjon vissza egy `ProcessInfo` értéket, és mentse el mindhárom paramétert a vele azonos nevű mezőbe.
 
 Példa a konstruktor használatára:
 
@@ -666,35 +696,31 @@ let process = ProcessInfo::new(
 
 ## Szöveges megjelenítés (`Display`)
 
-A Java `toString()` metódusához hasonló működéshez valósítsa meg a `std::fmt::Display` trait-et a `ProcessInfo` típushoz.
-
-A `Display` határozza meg, mi jelenjen meg, amikor a `ProcessInfo` értékét `{}` használatával írja ki:
+Valósítsd meg a `std::fmt::Display` trait-et is. Ez mondja meg, mi jelenjen meg `println!("{}", process)` használatakor:
 
 ```rust
 println!("{}", process);
 ```
 
-A fenti példának pontosan ezt kell kiírnia:
+A kimenet pontosan ez legyen:
 
 ```text
 Discord.exe [PID: 14280]
 ```
 
-Ehhez az implementációban a folyamat `name` és `pid` mezőjét kell a következő minta szerint formázni:
+Használd ezt a formátumot:
 
 ```text
 <name> [PID: <pid>]
 ```
 
-Nem az `executable_path` értékét kell megjeleníteni.
+Az `executable_path` ne szerepeljen a kiírásban.
 
 ---
 
 # 3.) feladat [3 pont]
 
-Az `apppw-core` crate forráskódjában hozzon létre egy publikus `NetworkConnection` `struct` típust!
-
-A felsorolt mezők legyenek `pub` mezők, mert más crate-eknek is olvasniuk kell őket:
+Az `apppw-core` crate-ben készíts egy publikus `NetworkConnection` structot. Minden felsorolt mező legyen `pub`, mert más crate-ek is használják:
 
 ```rust
 id: u64
@@ -714,7 +740,7 @@ bytes_sent: u64
 bytes_received: u64
 ```
 
-Hozzon létre az implementációban egy:
+Az `impl` blokkban készítsd el ezt a metódust:
 
 ```rust
 pub fn remote_address(&self) -> String
@@ -722,13 +748,13 @@ pub fn remote_address(&self) -> String
 
 metódust!
 
-Az eredmény formátuma például:
+Ez a távoli IP-címet és portot adja vissza, például:
 
 ```text
 162.159.135.232:443
 ```
 
-Hozzon létre egy:
+Készítsd el ezt a metódust is:
 
 ```rust
 pub fn display_destination(&self) -> String
@@ -736,65 +762,49 @@ pub fn display_destination(&self) -> String
 
 metódust is!
 
-Amennyiben a `hostname` ismert, az eredmény például:
+Ha van `hostname`, azt használd, például:
 
 ```text
 discord.com:443
 ```
 
-legyen!
-
-Ha nincs hostname, akkor az IP-címet használja!
-
-A cím összeállításánál az IPv6 formátumára is ügyeljen. Például az `::1` cím és a `443` port helyes alakja `[::1]:443`. Ehhez használható a szabványos `SocketAddr` típus; nem szükséges kézzel összefűzni az IP-címet és a portot.
+Ha nincs hostname, az IP-címet használd. IPv6-nál a formátum legyen helyes, például `[::1]:443`. Ehhez használhatod a szabványos `SocketAddr` típust, nem kell kézzel szöveget összeraknod.
 
 ---
 
 # 4.) feladat [3 pont]
 
-Az `apppw-windows` crate forráskódjában hozzon létre egy publikus `ProcessCollector` `struct` típust!
-
-Hozzon létre benne egy:
+Az `apppw-windows` crate-ben készíts egy publikus `ProcessCollector` structot. Ebben legyen ez a metódus:
 
 ```rust
 pub fn list_processes(&self) -> Result<Vec<ProcessInfo>>
 ```
 
-A `Result` itt nem egy önálló konkrét típus: választani kell hozzá hibát. Használható például `windows::core::Result<Vec<ProcessInfo>>`, vagy `anyhow::Result<Vec<ProcessInfo>>`, ha az `anyhow` dependency bekerül a crate-be. Egy megoldáson belül következetesen ugyanazt használja.
+Válassz egy konkrét hibatípust, például `windows::core::Result` vagy `anyhow::Result`, és használd következetesen. Siker esetén `Ok(processes)`, teljes lekérdezési hibánál `Err(error)` legyen az eredmény.
 
-A `Vec<ProcessInfo>` a Java `List<ProcessInfo>` megfelelője. Siker esetén a metódus `Ok(processes)`, teljes lekérdezési hiba esetén `Err(error)` értéket adjon vissza.
-
-metódust!
-
-A metódus kérdezze le a Windows operációs rendszer aktuálisan futó folyamatait!
-
-Minden olyan folyamathoz, amelyről rendelkezésre áll információ, mentse el:
+A metódus olvassa ki az éppen futó Windows folyamatokat. Minden elérhető folyamatnál mentsd el:
 
 - PID,
 - folyamat nevét,
 - futtatható állomány útvonalát.
 
-A Windows API-k eléréséhez használhatja a `windows` crate-et.
-
-Egyetlen sikertelen process-lekérdezés miatt a program ne szakítsa meg az összes folyamat feldolgozását! Az adott folyamat kihagyható, vagy a hiányzó útvonal `None` értékkel tárolható; a többi folyamat feldolgozása folytatódjon.
+Használhatod a `windows` crate-et. Egy folyamat hibája ne állítsa le a teljes listát: hagyd ki, vagy tárold az ismeretlen útvonalat `None` értékkel.
 
 ---
 
 # 5.) feladat [4 pont]
 
-Az `apppw-capture` crate forráskódjában hozzon létre egy publikus `PacketCapture` `struct` típust!
+Az `apppw-capture` crate-ben készíts egy publikus `PacketCapture` structot, amely WinDiverttel figyeli a Windows hálózati forgalmát.
 
-A struktúra használja a WinDivert könyvtárat a Windows hálózati forgalmának megfigyelésére.
-
-Nyisson egy WinDivert handle-t a TCP- és UDP-forgalom megfigyelésére. Mivel a későbbi feladatok a küldött és fogadott bájtokat is számolják, a végleges szűrő mindkét irányt engedje át:
+Nyiss WinDivert handle-t TCP és UDP csomagokra. A végleges szűrő mindkét irányt engedje át, mert később a küldött és fogadott bájtokat is számolod:
 
 ```text
 (tcp or udp)
 ```
 
-Az `outbound and (tcp or udp)` csak egy kezdeti, kizárólag kimenő forgalmat figyelő próbaszűrőként használható; azzal a fogadott forgalom nem számolható.
+Az `outbound and (tcp or udp)` csak kezdeti próba lehet, mert nem látja a fogadott adatokat.
 
-A program a beérkező csomagokból legalább az alábbi adatokat állapítsa meg:
+Minden csomagból legalább ezeket olvasd ki:
 
 ```text
 forrás IP
@@ -807,25 +817,17 @@ forgalom iránya
 csomag mérete
 ```
 
-A csomag adataiból hozzon létre belső hálózati eseményt.
+Hozz létre belső hálózati eseményt a csomag adataiból. A megfigyelt csomagot ne módosítsd. Ha a WinDivert módja visszainjektálást kér, változatlanul küldd vissza.
 
-A program a megfigyelt csomagot alapesetben ne módosítsa!
-
-Ha a WinDivert konfiguráció miatt a csomagot vissza kell injektálni a hálózati stackbe, azt változatlan formában tegye meg!
-
-A capture loop egy ismétlődő feldolgozási ciklus, amely várja a következő csomagot. Ez külön worker threaden vagy aszinkron háttérfeladatban fusson, hogy a grafikus felület közben tovább tudjon frissülni.
+A csomagolvasó ciklus külön worker threaden vagy háttérfeladatban fusson, hogy a felület ne akadjon meg.
 
 ---
 
 # 6.) feladat [4 pont]
 
-Az `apppw-windows` crate forráskódjában hozzon létre egy publikus `SocketProcessResolver` `struct` típust!
+Az `apppw-windows` crate-ben készíts egy publikus `SocketProcessResolver` structot. Ez próbálja meg egy hálózati kapcsolatot Windows folyamathoz kötni a TCP és UDP socketlisták alapján.
 
-A struktúra feladata, hogy egy hálózati kapcsolatot lehetőség szerint Windows folyamathoz rendeljen.
-
-A folyamat meghatározásához használhatja a Windows TCP és UDP kapcsolatlistáját.
-
-TCP esetén az összerendelés során vizsgálja:
+TCP-nél ezeket hasonlítsd össze:
 
 ```text
 local IP
@@ -835,17 +837,17 @@ remote port
 protocol
 ```
 
-A Windows TCP owner table tartalmaz helyi és távoli címet, portot, valamint PID-et. A Windows UDP owner table ezzel szemben csak a helyi címet, helyi portot és PID-et adja meg; távoli UDP-címet és portot nem. Emiatt UDP esetén csak a protokoll és a helyi végpont alapján próbáljon egyezést keresni. Ha ugyanahhoz a helyi UDP-porthoz több lehetséges folyamat tartozik, az eredmény legyen `None`.
+TCP-nél a Windows tábla helyi/távoli címet, portot és PID-et ad. UDP-nél csak a helyi címet, portot és PID-et, ezért UDP-nél csak a protokoll és helyi végpont alapján keress. Ha egy UDP porthoz több folyamat is illik, az eredmény `None`.
 
 Hivatalos referencia: [MIB_TCPROW_OWNER_PID](https://learn.microsoft.com/en-us/windows/win32/api/tcpmib/ns-tcpmib-mib_tcprow_owner_pid) és [MIB_UDPROW_OWNER_PID](https://learn.microsoft.com/en-us/windows/win32/api/udpmib/ns-udpmib-mib_udprow_owner_pid).
 
-A sikeres összerendelés eredménye:
+Siker esetén a kapcsolat PID-hez, majd `ProcessInfo` értékhez jut:
 
 ```text
 PID → ProcessInfo
 ```
 
-A resolver publikus metódusa adjon vissza `Option<ProcessInfo>` értéket: sikeres találatkor `Some(process_info)`, bizonytalan vagy sikertelen találatkor `None` legyen az eredmény. A pontos metódusnév szabadon választható.
+Legyen egy publikus metódusod, amely `Option<ProcessInfo>` értéket ad. Találatkor `Some(process_info)`, bizonytalan vagy hibás esetben `None`. A metódus nevét te választod.
 
 Például:
 
@@ -857,9 +859,7 @@ Discord.exe [PID: 14280]
 162.159.135.232:443
 ```
 
-Ha a folyamat nem állapítható meg megbízhatóan, a program ne találjon ki PID-et!
-
-Ilyen esetben:
+Ha nem vagy biztos a folyamatban, ne találj ki PID-et. Ilyenkor használd ezt:
 
 ```rust
 process: None
@@ -871,9 +871,7 @@ process: None
 
 # 7.) feladat [4 pont]
 
-Az `apppw-core` crate forráskódjában hozzon létre egy publikus `NetworkEvent` `enum` típust!
-
-Az enumeráció tartalmazza:
+Az `apppw-core` crate-ben készíts egy publikus `NetworkEvent` enumot ezekkel az értékekkel:
 
 ```rust
 PacketCaptured(CapturedPacket),
@@ -882,13 +880,11 @@ ConnectionUpdated(NetworkConnection),
 ConnectionClosed(u64)
 ```
 
-A `...` nem érvényes Rust-szintaxis, ezért itt a konkrét `CapturedPacket` típust kell használni. A `CapturedPacket` részletes mezőit a 9. feladat adja meg; a 7. és 9. feladatot emiatt együtt is meg lehet valósítani.
+Itt valódi `CapturedPacket` típust használj, ne `...` jelet. A 7. és 9. feladatot együtt is elkészítheted.
 
-Az `apppw-capture` crate forráskódjában hozzon létre egy publikus `ConnectionTracker` `struct` típust!
+Az `apppw-capture` crate-ben készíts egy publikus `ConnectionTracker` structot. Ez a WinDivert által látott TCP/UDP csomagokból tartja nyilván a kapcsolatokat.
 
-A struktúra a WinDivert által megfigyelt TCP és UDP csomagok alapján tartsa nyilván a hálózati kapcsolatokat.
-
-Kapcsolat azonosításához használja az úgynevezett 5-tuple-t:
+Egy kapcsolat azonosítója az 5-tuple:
 
 ```text
 protocol
@@ -898,7 +894,7 @@ destination IP
 destination port
 ```
 
-A tracker tartsa nyilván legalább:
+Kapcsolatonként legalább ezeket tartsd nyilván:
 
 ```text
 kapcsolat kezdete
@@ -908,15 +904,13 @@ fogadott bájtok
 folyamat
 ```
 
-Ezek lehetnek a `ConnectionTracker` saját belső rekordjának mezői; nem kötelező mindet utólag hozzáadni a 3. feladat `NetworkConnection` típusához.
+Ezek lehetnek a tracker belső rekordjában; nem kötelező mindet a `NetworkConnection` structba tenni.
 
 ---
 
 # 8.) feladat [3 pont]
 
-A `ConnectionTracker` legyen képes felismerni az új TCP kapcsolatokat.
-
-Új kapcsolat esetén hozzon létre:
+A `ConnectionTracker` ismerje fel az új TCP kapcsolatot. Új kapcsolatnál küldje ezt az eseményt:
 
 ```rust
 NetworkEvent::ConnectionOpened(connection)
@@ -924,7 +918,7 @@ NetworkEvent::ConnectionOpened(connection)
 
 eseményt.
 
-Már ismert kapcsolat esetén frissítse:
+Már ismert kapcsolatnál frissítsd ezeket:
 
 ```text
 bytes_sent
@@ -934,7 +928,7 @@ last_seen
 
 értékeket.
 
-Megszűnt vagy hosszabb ideje inaktív kapcsolat esetén hozzon létre:
+Lezárt vagy rég inaktív kapcsolatnál küldd ezt:
 
 ```rust
 NetworkEvent::ConnectionClosed(connection_id)
@@ -942,17 +936,15 @@ NetworkEvent::ConnectionClosed(connection_id)
 
 eseményt.
 
-UDP esetén a program kezelheti logikai sessionként az azonos 5-tuple-lel rendelkező csomagokat.
+UDP-nél az azonos 5-tuple-höz tartozó csomagokat kezelheted egy logikai sessionként.
 
-A két irány csomagjait ugyanahhoz a logikai kapcsolathoz kell rendelni. Vagyis az `A → B` és a válaszként érkező `B → A` tuple ne hozzon létre két külön kapcsolatot. A helyi végpont alapján döntse el, hogy a csomag bájtjai a `bytes_sent` vagy a `bytes_received` értéket növelik. Az inaktivitási időkorlát legyen egy névvel ellátott, könnyen módosítható konstans.
+Az `A -> B` és a válasz `B -> A` ugyanaz a kapcsolat legyen. A helyi végpont alapján döntsd el, hogy a bájtok a `bytes_sent` vagy a `bytes_received` számlálót növelik. Az inaktivitási időkorlát legyen névvel ellátott, könnyen módosítható konstans.
 
 ---
 
 # 9.) feladat [4 pont]
 
-Az `apppw-core` crate forráskódjában hozzon létre egy publikus `CapturedPacket` `struct` típust!
-
-A struktúra tartalmazza legalább:
+Az `apppw-core` crate-ben készíts egy publikus `CapturedPacket` structot. Legalább ezek a mezői legyenek:
 
 ```rust
 timestamp: SystemTime
@@ -970,17 +962,15 @@ payload_size: usize
 process: Option<ProcessInfo>
 ```
 
-A WinDivert által átadott packetből hozzon létre egy `CapturedPacket` értéket. A `packet_size` a teljes csomag mérete, a `payload_size` pedig csak a protokoll-headerek utáni hasznos adat mérete; a kettő nem feltétlenül azonos.
+Alakítsd a WinDivert csomagját `CapturedPacket` értékké. A `packet_size` a teljes méret, a `payload_size` csak a fejlécek utáni hasznos adat mérete, ezért eltérhetnek.
 
-A nyers packet tartalmának tárolása legyen opcionális, például egy `raw_packet: Option<Vec<u8>>` mezővel. Alapértelmezetten legyen `None`, hogy a program hosszabb futás során se használjon indokolatlanul sok memóriát.
+A nyers csomag tárolása legyen opcionális, például `raw_packet: Option<Vec<u8>>`. Alapértéke `None`, hogy a program ne fogyasszon sok memóriát.
 
 ---
 
 # 10.) feladat [3 pont]
 
-Az `apppw-core` crate forráskódjában hozzon létre egy publikus `HttpRequestInfo` `struct` típust!
-
-Az adattagok:
+Az `apppw-core` crate-ben készíts egy publikus `HttpRequestInfo` structot ezekkel a mezőkkel:
 
 ```rust
 id: u64
@@ -1007,16 +997,16 @@ started_at: SystemTime
 duration_ms: Option<u128>
 ```
 
-A body méretét akkor is töltse ki, ha magát a body tartalmát memóriahasználat vagy adatvédelmi okból nem tárolja. Az `Option` mezők itt azt jelzik, hogy az adat még nem érkezett meg, nem ismert, vagy szándékosan nincs eltárolva.
+A body méretét akkor is töltsd ki, ha magát a tartalmat memória- vagy adatvédelmi okból nem mented el. Az `Option` itt azt jelenti, hogy az adat még nem érkezett meg, nem ismert, vagy szándékosan nincs tárolva.
 
-Ugyanebben a crate-ben hozzon létre egy `struct` adattípust `HttpHeader` néven, az alábbi mezőkkel:
+Ugyanitt készíts `HttpHeader` structot ezekkel a mezőkkel:
 
 ```rust
 name: String
 value: String
 ```
 
-Valósítson meg egy:
+Készítsd el ezt a metódust is:
 
 ```rust
 pub fn display_url(&self) -> String
@@ -1034,7 +1024,7 @@ https://discord.com/api/v10/users/@me
 
 # 11.) feladat [3 pont]
 
-Az `apppw-core` crate-ben írjon egy publikus:
+Az `apppw-core` crate-ben írd meg ezt a publikus függvényt:
 
 ```rust
 pub fn redact_headers(headers: &[HttpHeader]) -> Vec<HttpHeader>
@@ -1042,7 +1032,7 @@ pub fn redact_headers(headers: &[HttpHeader]) -> Vec<HttpHeader>
 
 függvényt!
 
-Az alábbi érzékeny headerek értékét:
+Ezeknek az érzékeny headereknek az értékét:
 
 ```text
 Authorization
@@ -1051,33 +1041,25 @@ Cookie
 Set-Cookie
 ```
 
-cserélje:
+cseréld erre:
 
 ```text
 [REDACTED]
 ```
 
-értékre!
-
-A headernevek összehasonlítása ne legyen kis- és nagybetűérzékeny! A bemeneti slice-ot ne módosítsa; készítsen új `Vec<HttpHeader>` eredményt, és abban cserélje le csak az érzékeny értékeket.
+értékre. A headernév kis- és nagybetűje ne számítson. A bemeneti slice-ot ne módosítsd: adj vissza új `Vec<HttpHeader>` értéket, és csak abban írd át az érzékeny adatokat.
 
 ---
 
 # 12.) feladat [5 pont]
 
-Az `apppw-proxy` crate forráskódjában hozzon létre egy publikus `HttpProxy` `struct` típust!
-
-A proxy a lokális gépen konfigurálható TCP porton figyeljen!
-
-Alapértelmezett érték:
+Az `apppw-proxy` crate-ben készíts egy publikus `HttpProxy` structot. A proxy egy beállítható helyi TCP porton figyeljen. Az alapértelmezett cím:
 
 ```text
 127.0.0.1:8877
 ```
 
-A proxy legyen képes HTTP kérések fogadására és továbbítására.
-
-A kérésből mentse:
+A proxy fogadjon és továbbítson HTTP-kéréseket. A kérésből mentsd el:
 
 ```text
 HTTP method
@@ -1087,7 +1069,7 @@ headers
 body size
 ```
 
-A válaszból mentse:
+A válaszból mentsd el:
 
 ```text
 status code
@@ -1096,11 +1078,9 @@ body size
 response time
 ```
 
-Minden kérésből hozzon létre egy `HttpRequestInfo` értéket! Rustban általában „értéknek” vagy „példánynak” nevezzük; ez felel meg a Java objektumpéldányának.
+Minden kérésből hozz létre `HttpRequestInfo` értéket. A proxy kliensként kapcsolódjon a célkiszolgálóhoz, küldje tovább a kérést, majd adja vissza a választ az eredeti kliensnek. A proxyhiba ne legyen sikeres HTTP-válasz; adj értelmes hibát.
 
-A kérés továbbítása azt jelenti, hogy a proxy kliensként kapcsolódik a célkiszolgálóhoz, elküldi neki a beérkezett kérést, majd a választ visszaküldi az eredeti kliensnek. A proxyhibát ne alakítsa sikeres HTTP-válasszá; jelenítsen meg vagy továbbítson értelmes hibát.
-
-Ebben a feladatban a proxy még nem biztos, hogy ismeri a folyamatot. Ilyenkor a `HttpRequestInfo.process` értéke `None`; a folyamat hozzárendelése a 14. feladatban történik.
+Ebben a feladatban a proxy még nem biztos, hogy tudja a folyamatot. Ilyenkor `HttpRequestInfo.process` legyen `None`; ezt a 14. feladat oldja meg.
 
 Használható:
 
@@ -1115,7 +1095,7 @@ http-body-util
 
 # 13.) feladat [5 pont]
 
-Egészítse ki az `apppw-proxy` működését HTTPS támogatással!
+Egészítsd ki az `apppw-proxy`-t HTTPS támogatással.
 
 TLS kommunikációhoz használhatja:
 
@@ -1130,7 +1110,7 @@ Tanúsítványok létrehozásához használhatja:
 rcgen
 ```
 
-A proxy csak olyan alkalmazások forgalmát dekódolja, amelyek megfelelően használják a konfigurált helyi proxyt és elfogadják annak tanúsítványát.
+Csak olyan alkalmazás HTTPS-forgalmát dekódold, amely a beállított helyi proxyt használja és elfogadja a tanúsítványát.
 
 Ha egy kapcsolat nem dekódolható, akkor a WinDivert-alapú capture komponens továbbra is jelenítse meg például:
 
@@ -1143,17 +1123,13 @@ TLS
 Contents unavailable
 ```
 
-A program ne próbáljon certificate pinninget megkerülni!
-
-Ez a funkció csak a felhasználó által kifejezetten a helyi proxy használatára beállított alkalmazásokhoz készüljön. A generált helyi hitelesítésszolgáltatói tanúsítvány privát kulcsát ne exportálja és ne naplózza. A nem támogatott TLS-kapcsolatot titkosított kapcsolatként kell tovább kezelni, nem hibás HTTP-kérésként.
+Ne próbáld megkerülni a certificate pinninget. Ez csak tudatosan helyi proxyra beállított alkalmazásokhoz való funkció. A helyi CA privát kulcsát ne exportáld és ne naplózd. A nem támogatott TLS kapcsolat maradjon titkosított kapcsolat, ne jelenjen meg hibás HTTP-kérésként.
 
 ---
 
 # 14.) feladat [5 pont]
 
-Az `apppw-core` crate-ben hozzon létre egy publikus `TrafficCorrelator` `struct` típust!
-
-A komponens feladata három különböző adatforrás összekapcsolása:
+Az `apppw-core` crate-ben készíts egy publikus `TrafficCorrelator` structot. Ez három adatforrást próbál összekötni:
 
 ```text
 WinDivert packet
@@ -1163,7 +1139,7 @@ Windows socket/process information
 HTTP proxy event
 ```
 
-Az összerendeléshez vizsgálja:
+Az összekötéshez ezeket vizsgáld:
 
 ```text
 protocol
@@ -1186,15 +1162,13 @@ https://discord.com/api/v10/channels/123/messages
 
 jelenjen meg.
 
-Az időbélyegeket egy kicsi, konfigurálható időablakon belül hasonlítsa össze. Csak egyértelmű találat esetén kapcsolja össze az eseményeket. Ha nincs találat vagy több lehetséges találat van, a program az eseményt ismeretlen folyamattal (`process: None`) jelenítse meg; ne találjon ki PID-et.
+Az időpontokat egy kicsi, beállítható időablakban hasonlítsd. Csak egyértelmű találatnál kösd össze az adatokat. Ha nincs vagy több találat van, használd a `process: None` értéket; ne találj ki PID-et.
 
 ---
 
 # 15.) feladat [4 pont]
 
-Az `apppw-storage` crate-ben hozzon létre SQLite adatbázis-kezelést!
-
-Az adatbázis legalább az alábbi táblákat tartalmazza:
+Az `apppw-storage` crate-ben készíts SQLite adatbázis-kezelést. Legalább ezek a táblák legyenek benne:
 
 ```sql
 processes
@@ -1202,7 +1176,7 @@ connections
 http_requests
 ```
 
-A táblákat az alkalmazás indulásakor `CREATE TABLE IF NOT EXISTS` utasításokkal lehet létrehozni. A Rust `Option<T>` mezőit SQL `NULL` értékként tárolja, amikor az érték `None`.
+A táblákat induláskor `CREATE TABLE IF NOT EXISTS` utasításokkal hozd létre. A `None` érték SQL-ben `NULL` legyen.
 
 A `processes` táblában tárolja:
 
@@ -1244,7 +1218,7 @@ started_at
 duration_ms
 ```
 
-Írjon legalább:
+Legalább ezek a metódusok legyenek meg:
 
 ```rust
 pub fn save_process(&self, process: &ProcessInfo) -> Result<()>
@@ -1254,15 +1228,13 @@ pub fn save_http_request(&self, request: &HttpRequestInfo) -> Result<()>
 
 metódusokat!
 
-A metódusok fogadják a megfelelő `apppw-core` modellt, hajtsák végre az `INSERT` vagy szükség esetén `UPDATE` műveletet, és adjanak vissza `Result` értéket. Adatbázishibánál ne használjon `unwrap()` hívást, mert az leállítaná az egész alkalmazást.
+A metódusok a megfelelő `apppw-core` modellt kapják, `INSERT`-et vagy szükség esetén `UPDATE`-et hajtanak végre, és `Result` értéket adnak vissza. Adatbázishibánál ne használj `unwrap()`-ot.
 
 ---
 
 # 16.) feladat [4 pont]
 
-Az `apppw-ui` crate `src/main.rs` fájljában, illetve az abból meghívott modulokban készítsen `egui` / `eframe` alapú grafikus felületet!
-
-Az ablak bal oldalán jelenítse meg a megfigyelt folyamatokat!
+Az `apppw-ui` `src/main.rs` fájljában vagy az onnan hívott modulokban készíts `egui` / `eframe` felületet. Az ablak bal oldalán jelenjenek meg a figyelt folyamatok:
 
 ```text
 Processes
@@ -1273,25 +1245,19 @@ Processes
   Game.exe
 ```
 
-A folyamat kiválasztása után kizárólag annak hálózati aktivitása jelenjen meg!
-
-Legyen:
+A kiválasztott folyamatnál csak annak hálózati aktivitását mutasd. Legyen ilyen nézet is:
 
 ```text
 All processes
 ```
 
-nézet is.
-
-Az `eframe` alkalmazás állapotát egy saját `struct` tárolja, amely implementálja az `eframe::App` trait-et. A kijelölt folyamat lehet például `Option<u32>`: `None` jelentheti az „All processes” nézetet, `Some(pid)` pedig egy konkrét folyamatot.
+Az alkalmazás állapotát saját struct tárolja, amely megvalósítja az `eframe::App` trait-et. A kijelölés lehet `Option<u32>`: `None` az `All processes`, `Some(pid)` egy konkrét folyamat.
 
 ---
 
 # 17.) feladat [5 pont]
 
-Készítsen hálózati eseménylistát!
-
-A lista legalább az alábbi oszlopokat tartalmazza:
+Készíts hálózati eseménylistát. Legalább ezek az oszlopok legyenek benne:
 
 ```text
 Method
@@ -1316,15 +1282,13 @@ TLS    gateway.discord.gg                         ---   TLS     3.1 KB  8.4 KB  
 UDP    162.159.130.234                             ---   UDP     3.2 KB  1.1 KB   ---
 ```
 
-A WinDivertből érkező packet események ne blokkolják a grafikus felület frissítését! A háttérfeladat küldje az eseményeket channelen keresztül, a GUI pedig egy frissítés során csak a már megérkezett eseményeket olvassa ki. A GUI ne várakozzon blokkoló módon a következő csomagra.
+A WinDivert eseményei ne akadasszák meg a felületet. A háttérfeladat channelen küldje az eseményeket, a GUI pedig frissítéskor csak a már megérkezetteket olvassa ki. A GUI ne várjon a következő csomagra.
 
 ---
 
 # 18.) feladat [4 pont]
 
-Készítsen részletes kérésnézetet!
-
-HTTP kérés kiválasztásakor jelenjen meg:
+Készíts részletes kérésnézetet. HTTP-kérés kiválasztásakor ezek jelenjenek meg:
 
 ```text
 Headers
@@ -1334,7 +1298,7 @@ Timing
 Connection
 ```
 
-A `Connection` fülön jelenjen meg például:
+A `Connection` fülön például ez látszódjon:
 
 ```text
 Process: Discord.exe
@@ -1353,15 +1317,13 @@ Captured using:
 WinDivert
 ```
 
-Az érzékeny HTTP headerek alapértelmezetten legyenek maszkolva! Ehhez a 11. feladat `redact_headers` függvényét használja; ne készítsen külön, eltérő maszkolási logikát a UI-ban.
+Az érzékeny HTTP headerek alapból legyenek maszkolva. Ehhez a 11. feladat `redact_headers` függvényét használd, ne írj külön UI-s maszkolást.
 
 ---
 
 # 19.) feladat [4 pont]
 
-Valósítson meg keresést és szűrést!
-
-A felhasználó szűrhessen:
+Készíts keresést és szűrést. A felhasználó ezek alapján szűrhessen:
 
 ```text
 folyamatnév
@@ -1397,21 +1359,19 @@ protocol:UDP
 port:443
 ```
 
-Több feltétel egyidejű használata is legyen támogatott! A szóközzel elválasztott feltételek egyszerre legyenek igazak, vagyis logikai ÉS kapcsolatban álljanak. Például:
+Több feltétel is működjön egyszerre. A szóközzel elválasztott feltételek között logikai ÉS kapcsolat legyen, például:
 
 ```text
 process:Discord.exe protocol:TCP port:443
 ```
 
-Az ismeretlen szűrőkulcs vagy hibás számérték ne okozzon `panic`-ot; a felület jelenítsen meg érthető hibaüzenetet.
+Ismeretlen szűrőkulcs vagy hibás szám ne okozzon `panic`-ot; jeleníts meg érthető hibaüzenetet.
 
 ---
 
 # 20.) feladat [4 pont]
 
-A program különböztesse meg a dekódolható és nem dekódolható eseményeket!
-
-Használja legalább az alábbi állapotokat:
+A program különböztesse meg a dekódolható és nem dekódolható eseményeket. Legalább ezeket a címkéket használd:
 
 ```text
 HTTP
@@ -1441,17 +1401,13 @@ Unknown
 185.20.10.44:9000
 ```
 
-A WinDivert által elfogott packet önmagában ne legyen HTTP/API kérésnek tekintve!
-
-Ezek megjelenítési állapotok, nem feltétlenül új Rust enum-variánsok. A leképezés legyen következetes: dekódolt sima HTTP → `HTTP`, proxyn dekódolt HTTPS → `HTTPS decoded`, nem dekódolt TLS → `TLS encrypted`, azonosítatlan transportforgalom pedig a megfelelő `TCP`, `UDP`, `QUIC` vagy `Unknown` címkét kapja.
+Egy WinDivert csomag önmagában nem bizonyít HTTP/API-kérést. Ezek megjelenítési címkék, nem kötelező új Rust enumok. Használd őket következetesen: dekódolt HTTP -> `HTTP`, proxyval dekódolt HTTPS -> `HTTPS decoded`, nem dekódolt TLS -> `TLS encrypted`, egyéb forgalom -> `TCP`, `UDP`, `QUIC` vagy `Unknown`.
 
 ---
 
 # 21.) feladat [5 pont]
 
-Egészítse ki a programot valós idejű statisztikákkal!
-
-A kiválasztott folyamat esetén jelenítse meg:
+Egészítsd ki a programot valós idejű statisztikákkal. A kiválasztott folyamatnál jelenjen meg:
 
 ```text
 Aktív kapcsolatok száma
@@ -1477,15 +1433,13 @@ Hosts contacted:         14
 Average response time:   83 ms
 ```
 
-Minden értéket az aktuálisan kiválasztott folyamathoz és sessionhöz számoljon. Az „All processes” nézetben az összes folyamat adatait összegezze. Ha még nincs befejezett HTTP-kérés, az átlagos válaszidő helyén `---` jelenjen meg; ne osszon nullával.
+Minden érték az aktuálisan kiválasztott folyamatra és sessionre vonatkozzon. `All processes` nézetben összegezd az összes folyamatot. Ha nincs befejezett HTTP-kérés, az átlagos válaszidő legyen `---`; ne ossz nullával.
 
 ---
 
 # 22.) feladat [4 pont]
 
-Valósítson meg session kezelést!
-
-A felhasználó tudja elindítani és leállítani a rögzítést:
+Készíts session kezelést. A felhasználó indíthassa és állíthassa le a rögzítést:
 
 ```text
 Start Recording
@@ -1493,7 +1447,7 @@ Stop Recording
 Clear
 ```
 
-Minden session rendelkezzen:
+Minden sessionnek legyen:
 
 ```text
 azonosítóval
@@ -1502,17 +1456,17 @@ befejezési időponttal
 kiválasztott folyamattal
 ```
 
-Ehhez hozzon létre egy publikus `Session` modellt az `apppw-core` crate-ben. A kiválasztott folyamat legyen opcionális, mert az „All processes” módhoz nem tartozik egyetlen PID. A befejezési időpont rögzítés közben szintén legyen `None`.
+Készíts publikus `Session` modellt az `apppw-core` crate-ben. A kiválasztott folyamat opcionális, mert `All processes` nézetben nincs egy PID. Rögzítés közben a befejezési idő `None`.
 
-A 15. feladat adatbázisát egészítse ki egy `sessions` táblával és a szükséges sessionazonosító idegen kulcsokkal. A korábbi sessionök SQLite adatbázisból legyenek visszatölthetők!
+A 15. feladat adatbázisát bővítsd `sessions` táblával és a szükséges sessionazonosító idegen kulcsokkal. A korábbi sessionök tölthetők legyenek vissza SQLite-ból.
 
-A `Clear` gomb az aktuális, még nem mentett képernyőnézetet ürítse. Korábban mentett adatbázisrekordokat csak külön, egyértelmű törlési művelet és megerősítés után szabad törölni.
+A `Clear` csak az aktuális, még nem mentett képernyőadatot ürítse. Mentett adatbázisrekordot csak külön, egyértelmű törléssel és megerősítés után törölj.
 
 ---
 
 # 23.) feladat [4 pont]
 
-Készítsen JSON export funkciót!
+Készíts JSON exportot.
 
 Példa:
 
@@ -1541,19 +1495,13 @@ Példa:
 }
 ```
 
-Az exportált adatokban az érzékeny HTTP headerek alapértelmezetten ne szerepeljenek eredeti formában!
-
-Az exportálható adatszerkezetekhez használható a `Serialize` derive, a JSON előállításához pedig a `serde_json`. Export előtt ugyanazt a `redact_headers` függvényt használja, mint a felületen. Ha a headerek nem részei az exportformátumnak, akkor ne adja hozzá őket csak az export kedvéért.
+Az érzékeny HTTP headerek ne kerüljenek eredeti értékkel az exportba. Az exportálható típusokhoz használhatod a `Serialize` derive-ot, JSON-hoz a `serde_json`-t. Export előtt ugyanazt a `redact_headers` függvényt használd, mint a felületen. Ha a headerek nem részei az exportformátumnak, ne add hozzá őket csak emiatt.
 
 ---
 
 # 24.) feladat – komplex feladat [8 pont]
 
-Kapcsolja össze az előző feladatokban létrehozott komponenseket!
-
-Az alkalmazás indulását és a komponensek összekötését az `apppw-ui/src/main.rs` fájlból indítsa. A részletes logika külön modulokba kerülhet; a `main.rs` feladata elsősorban az inicializálás legyen.
-
-A program indításakor:
+Kösd össze az előző feladatok komponenseit. Az indítást és az összekötést az `apppw-ui/src/main.rs` indítsa; a részletes logika külön modulokban lehet. Induláskor történjen ez:
 
 1. kérdezze le a futó Windows folyamatokat;
 2. indítsa el a WinDivert capture komponenst;
@@ -1566,19 +1514,15 @@ A program indításakor:
 9. továbbítsa őket a grafikus felületnek;
 10. frissítse a megfelelő folyamat hálózati nézetét.
 
-A komponensek között ne használjon globális módosítható állapotot!
-
-Az események továbbítására használjon például:
+Ne használj globális, módosítható állapotot. Az események továbbításához használhatsz például:
 
 ```rust
 tokio::sync::mpsc
 ```
 
-csatornát. Ez hasonló egy Java blocking queue-hoz: az egyik komponens eseményt küld, egy másik pedig fogadja azt anélkül, hogy globális módosítható listán osztoznának.
+csatornát: az egyik komponens küld, a másik fogad, közös módosítható lista nélkül. A WinDivert ciklus külön worker threaden vagy aszinkron háttérben fusson.
 
-A WinDivert capture loop külön worker threaden vagy aszinkron feldolgozási rétegen fusson.
-
-A GUI bezárásakor:
+A GUI bezárásakor ezek álljanak le rendezetten:
 
 ```text
 WinDivert handle
@@ -1590,7 +1534,7 @@ background tasks
 
 szabályosan álljanak le.
 
-Ehhez küldjön leállítási jelzést a háttérfeladatoknak, zárja le a küldő csatornákat, majd várja meg a worker threadek vagy taskok befejeződését. A program ne hagyjon futó háttérfolyamatot maga után, és ne veszítsen el már adatbázisba küldött eseményt.
+Küldj leállítási jelzést a háttérfeladatoknak, zárd le a küldő csatornákat, majd várd meg a workerek és taskok végét. Kilépés után ne maradjon háttérfolyamat, és ne vesszen el már adatbázisba küldött esemény.
 
 ---
 
