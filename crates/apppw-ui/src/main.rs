@@ -1,12 +1,11 @@
 mod adapters;
 mod application;
 mod domain;
+mod runtime;
 
-use adapters::{
-    demo::{demo_events, demo_processes},
-    egui_ui::AppWatch,
-};
+use adapters::egui_ui::AppWatch;
 use application::AppState;
+use runtime::Runtime;
 
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
@@ -21,8 +20,9 @@ fn main() -> eframe::Result {
         "AppWatch",
         options,
         Box::new(|context| {
-            let state = AppState::new(demo_processes(), demo_events());
-            Ok(Box::new(AppWatch::new(context, state)))
+            let runtime = Runtime::start(context.egui_ctx.clone());
+            let state = AppState::new(runtime.processes.clone(), Vec::new());
+            Ok(Box::new(AppWatch::new(context, state, runtime)))
         }),
     )
 }
