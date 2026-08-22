@@ -41,6 +41,7 @@ pub struct AppState {
     pub session_seconds: u64,
     pub last_tick: std::time::Instant,
     pub toast: Option<String>,
+    pub capture_error: Option<String>,
 }
 
 impl AppState {
@@ -48,22 +49,23 @@ impl AppState {
         Self {
             processes,
             events,
-            selected_pid: Some(14_280),
-            selected_event: Some(1),
+            selected_pid: None,
+            selected_event: None,
             detail_tab: DetailTab::Headers,
             filter: String::new(),
             filter_error: None,
             recording: true,
-            session_seconds: 754,
+            session_seconds: 0,
             last_tick: std::time::Instant::now(),
             toast: None,
+            capture_error: None,
         }
     }
 
     pub fn visible_events(&self) -> Vec<&NetworkEvent> {
         self.events
             .iter()
-            .filter(|event| self.selected_pid.is_none_or(|pid| event.pid == pid))
+            .filter(|event| self.selected_pid.is_none_or(|pid| event.pid == Some(pid)))
             .filter(|event| matches_filter(event, &self.filter))
             .collect()
     }
@@ -148,17 +150,32 @@ fn matches_filter(event: &NetworkEvent, filter: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::demo::demo_events;
+    use crate::domain::EventKind;
 
     #[test]
     fn filter_combines_terms_and_reports_invalid_values() {
-        let event = &demo_events()[0];
+        let event = NetworkEvent {
+            id: 1,
+            pid: Some(42),
+            process: "client.exe".into(),
+            method: "GET".into(),
+            host: "example.com".into(),
+            path: "/".into(),
+            status: Some(200),
+            kind: EventKind::Https,
+            bytes_sent: 100,
+            bytes_received: 200,
+            packet_count: 2,
+            duration_ms: Some(10),
+            local: "127.0.0.1:50000".into(),
+            remote: "93.184.216.34:443".into(),
+        };
 
         assert!(matches_filter(
-            event,
-            "process:Discord.exe protocol:https port:443"
+            &event,
+            "process:client.exe protocol:https port:443"
         ));
-        assert!(!matches_filter(event, "method:POST"));
+        assert!(!matches_filter(&event, "method:POST"));
         assert!(validate_filter("port:not-a-number").is_err());
         assert!(validate_filter("owner:me").is_err());
     }
