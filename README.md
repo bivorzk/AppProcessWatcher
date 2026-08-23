@@ -1,122 +1,111 @@
 # AppProcessWatcher v0.2
 
-> Windows per-process network traffic monitor and HTTP(S) inspection tool
-> built with Rust, egui, Tokio, WinDivert, Hyper, and SQLite.
-> Don't mind the GUI it's made with AI and is still in development....
+> A Windows per-process network traffic monitor and HTTP(S) inspection tool
+> built with Rust, egui, Tokio, WinDivert, Hyper and SQLite.
+
+The interface is still in development.
+
 ![AppProcessWatcher screenshot](docs/screenshot.png)
 
 ## Features
 
 - Monitor network traffic by running process
-- Live upload/download statistics
-- TCP, UDP, and QUIC traffic observation
-- Inspect active connections
-- HTTP request inspection
-- HTTPS inspection through a local MITM proxy
-- Persistent local CA certificate
-- Chromium / Electron / CEF detection
-- Qt WebEngine support
-- WebView2 support
-- Local traffic/history storage using SQLite
+- View live upload and download statistics
+- Observe TCP, UDP and QUIC traffic
+- Inspect active connections and HTTP requests
+- Inspect HTTPS through a local man-in-the-middle (MITM) proxy
+- Use a persistent local certificate authority (CA)
+- Detect Chromium, Electron, CEF, Qt WebEngine and WebView2 applications
+- Store local traffic history in SQLite
 
 ## How It Works
 
 AppProcessWatcher combines packet capture with a local HTTP(S) proxy.
 
-WinDivert captures network traffic and AppProcessWatcher associates packets
+WinDivert captures network traffic, and AppProcessWatcher associates packets
 with running Windows processes. This provides per-process traffic statistics
 without requiring applications to use the proxy.
 
-HTTP(S) inspection is separate. Applications must be launched through the
-AppProcessWatcher proxy to inspect application-layer requests.
+HTTP(S) inspection is separate. Applications must use the AppProcessWatcher
+proxy before application-layer requests and responses can be inspected.
 
-            ┌─────────────────────┐
-            │   Target Process    │
-            └──────────┬──────────┘
-                       │
-             Network traffic
-                       │
-              ┌────────▼────────┐
-              │    WinDivert    │
-              └────────┬────────┘
-                       │
-              Process attribution
-                       │
-              ┌────────▼────────┐
-              │ AppProcessWatcher│
-              └─────────────────┘
-
-For HTTP(S) inspection:
-
-Target Process → AppWatch Proxy → Remote Server
-                       │
-                       └→ Request inspection
+```text
+Target application
+        |
+        +-- Raw network traffic --> WinDivert --> Process attribution
+        |
+        +-- HTTP(S) traffic -----> AppWatch proxy --> Remote server
+                                      |
+                                      +--> Request and response inspection
+```
 
 ## Requirements
 
-- Windows 10/11
-- Administrator privileges
-- Rust toolchain (when building from source)
-- AppWatch CA certificate trusted for HTTPS inspection
+- Windows 10 or 11
+- Administrator privileges for WinDivert packet capture
+- A Rust toolchain when building from source
+- The AppWatch CA certificate trusted for HTTPS inspection
 
 ## Usage
 
-```text
-RUST DESKTOP                                      2026
+1. Launch AppWatch with administrator privileges to enable TCP, UDP and QUIC
+   packet capture.
+2. Select an application or process to inspect its connections and live
+   upload and download traffic.
+3. Open **Proxy > Trust HTTPS certificate...** and confirm the security warning.
+4. Relaunch the target application through the proxy at
+   `http://127.0.0.1:8877`.
 
-AppWatch
-Rust / egui / Tokio / WinDivert / Hyper / SQLite
+HTTPS inspection works only for applications using the AppWatch proxy.
+HTTP/3 and QUIC payloads cannot currently be decrypted. Binary or encoded
+responses are hidden by default but can be revealed from the response panel.
 
-> Launch AppWatch with administrator privileges to enable live
-	TCP, UDP, and QUIC packet capture.
+## Chromium-based Applications
 
-> Select a running application to inspect its connections and live
-	upload/download traffic.
+When relaunching an application through the proxy, AppWatch checks the
+executable's directory and its immediate subdirectories for Chromium,
+Electron or CEF files. Detected applications receive `--proxy-server` and
+`--disable-quic` command-line switches.
 
-> To capture HTTP and HTTPS requests, trust the AppWatch certificate (it's persistent)
-	and relaunch the target application through http://127.0.0.1:8877.
+AppWatch also detects Qt WebEngine through `Qt5WebEngineCore.dll` or
+`Qt6WebEngineCore.dll`, and WebView2 through `WebView2Loader.dll` in common
+runtime locations. Qt WebEngine receives its flags through
+`QTWEBENGINE_CHROMIUM_FLAGS`; WebView2 receives them through
+`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`.
 
-> HTTPS inspection only works for applications using the AppWatch
-	proxy. HTTP/3 and QUIC traffic cannot be decrypted.
-```
-
-## Chromium-based Apps
-
-The application is still in early development so if you encounter any issues let me know 
-
-When relaunching an application through the proxy, AppWatch checks the executable's
-directory and its immediate subdirectories for Chromium, Electron, or CEF files:
-`chrome_elf.dll`, `libcef.dll`, `resources/app.asar`, or the `icudtl.dat` and
-`resources.pak` pair. A match causes AppWatch to pass `--proxy-server` and
-`--disable-quic` directly to the application.
-
-It also detects Qt WebEngine through `Qt5WebEngineCore.dll` or
-`Qt6WebEngineCore.dll`, and WebView2 through `WebView2Loader.dll` in its standard
-runtime locations. These apps receive the equivalent Chromium flags through their
+Detection is best-effort because applications can package or configure these
+runtimes differently.
 
 ## HTTPS Inspection
 
-AppProcessWatcher uses a locally generated certificate authority to inspect
-HTTPS traffic passing through its proxy.
+AppProcessWatcher uses a locally generated CA to inspect HTTPS traffic passing
+through its proxy. Its private key and public certificate persist under
+`%LOCALAPPDATA%\AppWatch` so the trusted certificate remains valid after the
+application restarts.
 
-The CA certificate is persistent and must be explicitly trusted by the user.
+The CA must be explicitly trusted through the Proxy menu. Trusting it allows
+AppWatch to decrypt HTTPS traffic for the current Windows user. Only enable
+this on a device you control, and remove the certificate from the Windows
+trusted root store when you no longer use HTTPS inspection.
 
 Applications using certificate pinning may reject AppProcessWatcher's
-generated certificates and therefore cannot be inspected.
+generated certificates and cannot be inspected through this proxy.
 
 ## Limitations
 
 - Windows only
-- HTTP/3 / QUIC payloads cannot currently be decrypted
+- HTTP/3 and QUIC payloads cannot currently be decrypted
 - HTTPS inspection requires the target application to use the AppWatch proxy
 - Applications using certificate pinning may reject intercepted HTTPS traffic
 - Some applications may ignore proxy configuration
-- Protocols other than HTTP(S) can be observed at the network level but their
+- Protocols other than HTTP(S) can be observed at the network level, but their
   application payloads are not decoded
 
 ## Building
 
-```bash
-git clone <repo>
+```powershell
+git clone https://github.com/bivorzk/AppProcessWatcher.git
 cd AppProcessWatcher
 cargo build --release
+cargo run --release -p apppw-ui
+```
