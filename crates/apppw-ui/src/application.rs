@@ -50,6 +50,7 @@ pub struct AppState {
     pub toast: Option<String>,
     pub capture_error: Option<String>,
     pub confirm_relaunch_all: bool,
+    pub confirm_trust_certificate: bool,
     pub process_tab: ProcessTab,
 }
 
@@ -70,6 +71,7 @@ impl AppState {
             toast: None,
             capture_error: None,
             confirm_relaunch_all: false,
+            confirm_trust_certificate: false,
             process_tab: ProcessTab::Applications,
         }
     }

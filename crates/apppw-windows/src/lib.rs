@@ -137,14 +137,33 @@ pub fn relaunch_through_proxy(pid: u32, proxy: &str) -> Result<(), String> {
     if let Some(directory) = path.parent() {
         command.current_dir(directory);
     }
-    apply_proxy_environment(&mut command, proxy)
+    apply_proxy_settings(&mut command, &path, proxy)
         .spawn()
         .map_err(|error| format!("could not start {}: {error}", path.display()))?;
     Ok(())
 }
 
-fn apply_proxy_environment<'a>(command: &'a mut Command, proxy: &str) -> &'a mut Command {
-    command.env("HTTP_PROXY", proxy).env("HTTPS_PROXY", proxy)
+fn apply_proxy_settings<'a>(
+    command: &'a mut Command,
+    executable: &std::path::Path,
+    proxy: &str,
+) -> &'a mut Command {
+    command.env("HTTP_PROXY", proxy).env("HTTPS_PROXY", proxy);
+    if executable
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            matches!(
+                name.to_ascii_lowercase().as_str(),
+                "chrome.exe" | "discord.exe"
+            )
+        })
+    {
+        command
+            .arg(format!("--proxy-server={proxy}"))
+            .arg("--disable-quic");
+    }
+    command
 }
 
 pub fn relaunch_open_apps_through_proxy(proxy: &str) -> Result<RelaunchSummary, String> {
@@ -403,7 +422,11 @@ mod tests {
     #[test]
     fn relaunch_command_sets_common_proxy_environment_names() {
         let mut command = Command::new("example.exe");
-        apply_proxy_environment(&mut command, "http://127.0.0.1:8877");
+        apply_proxy_settings(
+            &mut command,
+            std::path::Path::new("example.exe"),
+            "http://127.0.0.1:8877",
+        );
         let variables = command
             .get_envs()
             .filter_map(|(name, value)| Some((name.to_str()?, value?.to_str()?)))
@@ -411,6 +434,27 @@ mod tests {
 
         for name in ["HTTP_PROXY", "HTTPS_PROXY"] {
             assert_eq!(variables.get(name), Some(&"http://127.0.0.1:8877"));
+        }
+    }
+
+    #[test]
+    fn chromium_apps_receive_native_proxy_and_quic_flags() {
+        for executable in ["chrome.exe", "Discord.EXE"] {
+            let mut command = Command::new(executable);
+            apply_proxy_settings(
+                &mut command,
+                std::path::Path::new(executable),
+                "http://127.0.0.1:8877",
+            );
+            let arguments = command
+                .get_args()
+                .map(|argument| argument.to_string_lossy())
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                arguments,
+                ["--proxy-server=http://127.0.0.1:8877", "--disable-quic"]
+            );
         }
     }
 

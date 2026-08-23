@@ -97,7 +97,16 @@ impl HttpProxy {
     }
 
     pub fn enable_tls_inspection(mut self) -> Result<Self, BoxError> {
-        self.certificate_authority = Some(Arc::new(LocalCertificateAuthority::new()?));
+        self.certificate_authority = Some(Arc::new(LocalCertificateAuthority::new(None)?));
+        Ok(self)
+    }
+
+    pub fn enable_tls_inspection_with_private_key(
+        mut self,
+        private_key: &[u8],
+    ) -> Result<Self, BoxError> {
+        self.certificate_authority =
+            Some(Arc::new(LocalCertificateAuthority::new(Some(private_key))?));
         Ok(self)
     }
 
@@ -105,6 +114,12 @@ impl HttpProxy {
         self.certificate_authority
             .as_ref()
             .map(|authority| authority.certificate.der().to_vec())
+    }
+
+    pub fn ca_private_key_der(&self) -> Option<Vec<u8>> {
+        self.certificate_authority
+            .as_ref()
+            .map(|authority| authority.issuer.key().serialize_der())
     }
 
     pub async fn start(self) -> Result<ProxyHandle, BoxError> {
@@ -315,7 +330,7 @@ impl ProxyRuntime {
 }
 
 impl LocalCertificateAuthority {
-    fn new() -> Result<Self, BoxError> {
+    fn new(private_key: Option<&[u8]>) -> Result<Self, BoxError> {
         let mut params = CertificateParams::new(Vec::<String>::new())?;
         params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
         params
@@ -326,7 +341,7 @@ impl LocalCertificateAuthority {
             KeyUsagePurpose::KeyCertSign,
             KeyUsagePurpose::CrlSign,
         ];
-        let key = KeyPair::generate()?;
+        let key = private_key.map_or_else(KeyPair::generate, KeyPair::try_from)?;
         let certificate = params.self_signed(&key)?;
         Ok(Self {
             certificate,
@@ -444,9 +459,12 @@ mod tests {
         use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
         use tokio_rustls::TlsConnector;
 
-        let authority = Arc::new(LocalCertificateAuthority::new().unwrap());
+        let original = LocalCertificateAuthority::new(None).unwrap();
+        let trusted_certificate = original.certificate.der().clone();
+        let private_key = original.issuer.key().serialize_der();
+        let authority = Arc::new(LocalCertificateAuthority::new(Some(&private_key)).unwrap());
         let mut roots = RootCertStore::empty();
-        roots.add(authority.certificate.der().clone()).unwrap();
+        roots.add(trusted_certificate).unwrap();
         let connector = TlsConnector::from(Arc::new(
             ClientConfig::builder()
                 .with_root_certificates(roots)

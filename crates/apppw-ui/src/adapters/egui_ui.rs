@@ -302,7 +302,12 @@ impl AppWatch {
             });
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.menu_button("Proxy relaunch", |ui| {
+                ui.menu_button("Proxy", |ui| {
+                    if ui.button("Trust HTTPS certificate…").clicked() {
+                        self.confirm_trust_certificate = true;
+                        ui.close();
+                    }
+                    ui.separator();
                     ui.add_enabled_ui(self.selected_pid.is_some(), |ui| {
                         if ui.button("Relaunch selected app").clicked() {
                             self.runtime.relaunch_through_proxy(self.selected_pid);
@@ -783,6 +788,42 @@ impl AppWatch {
             self.confirm_relaunch_all = false;
         }
     }
+
+    fn certificate_confirmation(&mut self, context: &egui::Context) {
+        if !self.confirm_trust_certificate {
+            return;
+        }
+        let mut confirmed = false;
+        let mut cancelled = false;
+        egui::Window::new("Trust AppWatch HTTPS certificate?")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(context, |ui| {
+                ui.label("This installs the AppWatch CA in your current Windows user's trusted root store.");
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new("This allows AppWatch to decrypt HTTPS traffic. Only continue on your own device and remove the certificate when you no longer use HTTPS inspection.")
+                        .color(WARNING),
+                );
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if primary_button(ui, "Trust certificate").clicked() {
+                        confirmed = true;
+                    }
+                    if secondary_button(ui, "Cancel").clicked() {
+                        cancelled = true;
+                    }
+                });
+            });
+        if confirmed {
+            self.runtime.trust_https_certificate();
+            self.toast = Some("Installing the HTTPS certificate for the current user…".into());
+            self.confirm_trust_certificate = false;
+        } else if cancelled {
+            self.confirm_trust_certificate = false;
+        }
+    }
 }
 
 impl eframe::App for AppWatch {
@@ -838,6 +879,7 @@ impl eframe::App for AppWatch {
                 }
             });
         self.relaunch_confirmation(ui.ctx());
+        self.certificate_confirmation(ui.ctx());
     }
 }
 

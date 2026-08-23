@@ -2,7 +2,9 @@ use std::{
     collections::HashMap,
     env, fs,
     net::SocketAddr,
+    os::windows::process::CommandExt,
     path::PathBuf,
+    process::Command,
     sync::mpsc::{self, Receiver, Sender, TryRecvError},
     thread::{self, JoinHandle},
     time::{Duration, Instant, SystemTime},
@@ -34,6 +36,7 @@ pub enum RuntimeEvent {
 
 enum RuntimeAction {
     Relaunch(Option<u32>),
+    TrustCertificate,
 }
 
 pub struct Runtime {
@@ -92,6 +95,10 @@ impl Runtime {
 
     pub fn relaunch_through_proxy(&self, pid: Option<u32>) {
         let _ = self.actions.send(RuntimeAction::Relaunch(pid));
+    }
+
+    pub fn trust_https_certificate(&self) {
+        let _ = self.actions.send(RuntimeAction::TrustCertificate);
     }
 }
 
@@ -215,27 +222,36 @@ fn run_components(
                 changed = true;
             }
         }
-        while let Ok(RuntimeAction::Relaunch(pid)) = actions.try_recv() {
+        while let Ok(action) = actions.try_recv() {
             let Some(proxy) = &proxy else {
                 let _ = sender.send(RuntimeEvent::Error(
                     "Cannot relaunch applications because the proxy is offline.".into(),
                 ));
                 continue;
             };
-            let proxy_url = format!("http://{}", proxy.address);
-            let message = match pid {
-                Some(pid) => relaunch_through_proxy(pid, &proxy_url)
-                    .map(|()| format!("Relaunched PID {pid} through {proxy_url}.")),
-                None => relaunch_open_apps_through_proxy(&proxy_url).map(|summary| {
-                    format!(
-                        "Relaunched {} open app(s) through the proxy; {} could not be relaunched.",
-                        summary.relaunched, summary.failed
-                    )
-                }),
+            let message = match action {
+                RuntimeAction::Relaunch(pid) => {
+                    let proxy_url = format!("http://{}", proxy.address);
+                    match pid {
+                        Some(pid) => relaunch_through_proxy(pid, &proxy_url)
+                            .map(|()| format!("Relaunched PID {pid} through {proxy_url}."))
+                            .map_err(|error| format!("Proxy relaunch failed: {error}")),
+                        None => relaunch_open_apps_through_proxy(&proxy_url)
+                            .map(|summary| {
+                                format!(
+                                    "Relaunched {} open app(s) through the proxy; {} could not be relaunched.",
+                                    summary.relaunched, summary.failed
+                                )
+                            })
+                            .map_err(|error| format!("Proxy relaunch failed: {error}")),
+                    }
+                }
+                RuntimeAction::TrustCertificate => trust_https_certificate(&proxy.certificate_path)
+                    .map(|()| "AppWatch HTTPS certificate trusted for the current Windows user. Restart the target application before capturing HTTPS.".into()),
             };
             let _ = sender.send(match message {
                 Ok(message) => RuntimeEvent::Warning(message),
-                Err(error) => RuntimeEvent::Error(format!("Proxy relaunch failed: {error}")),
+                Err(error) => RuntimeEvent::Error(error),
             });
             context.request_repaint();
         }
@@ -462,10 +478,19 @@ impl ProxyWorker {
             };
             runtime.block_on(async move {
                 let (proxy_sender, mut proxy_events) = tokio::sync::mpsc::unbounded_channel();
-                let proxy = match HttpProxy::localhost(proxy_sender)
-                    .capture_bodies(true)
-                    .enable_tls_inspection()
-                {
+                let key_path = appwatch_directory().join("AppWatch HTTPS Inspection CA.key");
+                let saved_key = fs::read(&key_path).ok();
+                let proxy_with_saved_key = saved_key.as_deref().and_then(|key| {
+                    HttpProxy::localhost(proxy_sender.clone())
+                        .capture_bodies(true)
+                        .enable_tls_inspection_with_private_key(key)
+                        .ok()
+                });
+                let proxy = match proxy_with_saved_key.map(Ok).unwrap_or_else(|| {
+                    HttpProxy::localhost(proxy_sender.clone())
+                        .capture_bodies(true)
+                        .enable_tls_inspection()
+                }) {
                     Ok(proxy) => proxy,
                     Err(error) => {
                         let _ = started_sender
@@ -473,6 +498,12 @@ impl ProxyWorker {
                         return;
                     }
                 };
+                if let Err(error) = save_ca_private_key(&proxy, &key_path) {
+                    let _ = started_sender.send(Err(format!(
+                        "HTTPS inspection key could not be saved: {error}"
+                    )));
+                    return;
+                }
                 let certificate_path = match export_ca_certificate(&proxy) {
                     Ok(path) => path,
                     Err(error) => {
@@ -519,10 +550,7 @@ impl ProxyWorker {
 }
 
 fn export_ca_certificate(proxy: &HttpProxy) -> std::io::Result<PathBuf> {
-    let directory = env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("AppWatch");
+    let directory = appwatch_directory();
     fs::create_dir_all(&directory)?;
     let path = directory.join("AppWatch HTTPS Inspection CA.cer");
     let certificate = proxy
@@ -530,6 +558,54 @@ fn export_ca_certificate(proxy: &HttpProxy) -> std::io::Result<PathBuf> {
         .expect("TLS inspection always provides a CA certificate");
     fs::write(&path, certificate)?;
     Ok(path)
+}
+
+fn appwatch_directory() -> PathBuf {
+    env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("AppWatch")
+}
+
+fn save_ca_private_key(proxy: &HttpProxy, path: &std::path::Path) -> std::io::Result<()> {
+    fs::create_dir_all(path.parent().unwrap_or_else(|| std::path::Path::new(".")))?;
+    fs::write(
+        path,
+        proxy
+            .ca_private_key_der()
+            .expect("TLS inspection always provides a private key"),
+    )
+}
+
+fn trust_https_certificate(path: &std::path::Path) -> Result<(), String> {
+    let output = certificate_install_command(path)
+        .output()
+        .map_err(|error| format!("Could not start Windows certificate installer: {error}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let detail = if stderr.trim().is_empty() {
+            stdout.trim()
+        } else {
+            stderr.trim()
+        };
+        Err(format!(
+            "Windows could not trust the AppWatch HTTPS certificate: {}",
+            detail
+        ))
+    }
+}
+
+fn certificate_install_command(path: &std::path::Path) -> Command {
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let mut command = Command::new("certutil");
+    command
+        .args(["-user", "-f", "-addstore", "Root"])
+        .arg(path)
+        .creation_flags(CREATE_NO_WINDOW);
+    command
 }
 
 impl Drop for ProxyWorker {
@@ -569,6 +645,20 @@ mod tests {
 
         prioritise_processes(&mut processes);
         assert_eq!(processes[0].pid, 2);
+    }
+
+    #[test]
+    fn certificate_install_targets_only_the_current_user_root_store() {
+        let command = certificate_install_command(std::path::Path::new("certificate.cer"));
+        let arguments = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            arguments,
+            ["-user", "-f", "-addstore", "Root", "certificate.cer"]
+        );
     }
 
     #[test]
