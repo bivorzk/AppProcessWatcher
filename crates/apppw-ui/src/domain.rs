@@ -1,11 +1,11 @@
 #[derive(Clone)]
 pub struct Process {
     pub pid: u32,
-    pub name: &'static str,
+    pub name: String,
     pub active: bool,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EventKind {
     Http,
     Https,
@@ -33,18 +33,23 @@ impl EventKind {
 #[derive(Clone)]
 pub struct NetworkEvent {
     pub id: u64,
-    pub pid: u32,
-    pub process: &'static str,
-    pub method: &'static str,
-    pub host: &'static str,
-    pub path: &'static str,
+    pub pid: Option<u32>,
+    pub process: String,
+    pub method: String,
+    pub host: String,
+    pub path: String,
     pub status: Option<u16>,
     pub kind: EventKind,
-    pub sent: &'static str,
-    pub received: &'static str,
+    pub bytes_sent: u64,
+    pub bytes_received: u64,
+    pub packet_count: u64,
     pub duration_ms: Option<u64>,
-    pub local: &'static str,
-    pub remote: &'static str,
+    pub local: String,
+    pub remote: String,
+    pub request_headers: Vec<HttpHeader>,
+    pub response_headers: Vec<HttpHeader>,
+    pub request_body: Option<Vec<u8>>,
+    pub response_body: Option<Vec<u8>>,
 }
 
 impl NetworkEvent {
@@ -64,3 +69,4 @@ impl NetworkEvent {
         .to_lowercase()
     }
 }
+use apppw_core::HttpHeader;

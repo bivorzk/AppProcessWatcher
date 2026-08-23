@@ -169,6 +169,10 @@ mod tests {
             duration_ms: Some(10),
             local: "127.0.0.1:50000".into(),
             remote: "93.184.216.34:443".into(),
+            request_headers: Vec::new(),
+            response_headers: Vec::new(),
+            request_body: None,
+            response_body: None,
         };
 
         assert!(matches_filter(
