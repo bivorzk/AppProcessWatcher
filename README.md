@@ -2,7 +2,7 @@
 
 > Windows per-process network traffic monitor and HTTP(S) inspection tool
 > built with Rust, egui, Tokio, WinDivert, Hyper, and SQLite.
-
+> Don't mind the GUI it's made with AI and is still in development....
 ![AppProcessWatcher screenshot](docs/screenshot.png)
 
 ## Features
