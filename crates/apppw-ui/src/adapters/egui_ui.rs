@@ -1,9 +1,9 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use eframe::egui::{self, Align, Color32, CornerRadius, Frame, Layout, Margin, RichText, Stroke};
 
 use crate::{
-    application::{AppState, DetailTab, validate_filter},
+    application::{AppState, DetailTab, ProcessTab, validate_filter},
     domain::EventKind,
     runtime::{Runtime, RuntimeEvent},
 };
@@ -30,6 +30,7 @@ impl EventKind {
 pub struct AppWatch {
     state: AppState,
     runtime: Runtime,
+    process_icons: HashMap<u32, egui::TextureHandle>,
 }
 
 impl std::ops::Deref for AppWatch {
@@ -52,7 +53,26 @@ impl AppWatch {
 
     pub fn new(context: &eframe::CreationContext<'_>, state: AppState, runtime: Runtime) -> Self {
         apply_theme(&context.egui_ctx);
-        Self { state, runtime }
+        let process_icons = state
+            .processes
+            .iter()
+            .filter_map(|process| {
+                let pixels = process.icon_rgba.as_ref()?;
+                Some((
+                    process.pid,
+                    context.egui_ctx.load_texture(
+                        format!("process-icon-{}", process.pid),
+                        egui::ColorImage::from_rgba_unmultiplied([32, 32], pixels),
+                        egui::TextureOptions::LINEAR,
+                    ),
+                ))
+            })
+            .collect();
+        Self {
+            state,
+            runtime,
+            process_icons,
+        }
     }
 
     fn receive_runtime_events(&mut self, context: &egui::Context) {
@@ -73,6 +93,7 @@ impl AppWatch {
                     }
                 }
                 RuntimeEvent::Closed(id) => self.events.retain(|event| event.id != id),
+                RuntimeEvent::Processes(processes) => self.replace_processes(context, processes),
                 RuntimeEvent::Warning(warning) => self.toast = Some(warning),
                 RuntimeEvent::Error(error) => self.capture_error = Some(error),
             }
@@ -80,6 +101,58 @@ impl AppWatch {
                 context.request_repaint();
             }
         }
+    }
+
+    fn replace_processes(
+        &mut self,
+        context: &egui::Context,
+        processes: Vec<crate::domain::Process>,
+    ) {
+        let selected_name = (self.process_tab == ProcessTab::Applications)
+            .then(|| {
+                self.selected_pid.and_then(|pid| {
+                    self.processes
+                        .iter()
+                        .find(|process| process.pid == pid)
+                        .map(|process| process.name.clone())
+                })
+            })
+            .flatten();
+        if let Some(selected_pid) = self.selected_pid {
+            self.selected_pid = processes
+                .iter()
+                .find(|process| process.pid == selected_pid)
+                .or_else(|| {
+                    selected_name.as_ref().and_then(|name| {
+                        processes.iter().find(|process| {
+                            process.application && process.name.eq_ignore_ascii_case(name)
+                        })
+                    })
+                })
+                .map(|process| process.pid);
+            if self.selected_pid.is_none() {
+                self.selected_event = None;
+            }
+        }
+
+        self.process_icons
+            .retain(|pid, _| processes.iter().any(|process| process.pid == *pid));
+        for process in &processes {
+            if self.process_icons.contains_key(&process.pid) {
+                continue;
+            }
+            if let Some(pixels) = &process.icon_rgba {
+                self.process_icons.insert(
+                    process.pid,
+                    context.load_texture(
+                        format!("process-icon-{}", process.pid),
+                        egui::ColorImage::from_rgba_unmultiplied([32, 32], pixels),
+                        egui::TextureOptions::LINEAR,
+                    ),
+                );
+            }
+        }
+        self.processes = processes;
     }
 
     fn panel() -> Frame {
@@ -111,33 +184,59 @@ impl AppWatch {
             });
         });
         ui.add_space(24.0);
-        section_label(ui, "PROCESSES");
+        section_label(ui, "PROGRAMMES");
+        ui.horizontal(|ui| {
+            ui.selectable_value(
+                &mut self.process_tab,
+                ProcessTab::Applications,
+                "Applications",
+            );
+            ui.selectable_value(&mut self.process_tab, ProcessTab::Processes, "Processes");
+        });
         ui.add_space(6.0);
 
-        if process_button(
-            ui,
-            self.selected_pid.is_none(),
-            true,
-            "All processes",
-            &format!("{} apps", self.processes.len()),
-        ) {
-            self.selected_pid = None;
-            self.selected_event = None;
-        }
+        let application_count = self
+            .processes
+            .iter()
+            .filter(|process| process.application)
+            .count();
 
         let mut next_pid = None;
-        for process in &self.processes {
-            let selected = self.selected_pid == Some(process.pid);
-            if process_button(
-                ui,
-                selected,
-                process.active,
-                &process.name,
-                &format!("PID {}", process.pid),
-            ) {
-                next_pid = Some(process.pid);
-            }
-        }
+        egui::ScrollArea::vertical()
+            .id_salt("programme-list")
+            .max_height((ui.available_height() - 84.0).max(100.0))
+            .show(ui, |ui| {
+                if process_button(
+                    ui,
+                    self.selected_pid.is_none(),
+                    true,
+                    None,
+                    "All traffic",
+                    &match self.process_tab {
+                        ProcessTab::Applications => format!("{application_count} open apps"),
+                        ProcessTab::Processes => format!("{} processes", self.processes.len()),
+                    },
+                ) {
+                    self.selected_pid = None;
+                    self.selected_event = None;
+                }
+
+                for process in self.processes.iter().filter(|process| {
+                    self.process_tab == ProcessTab::Processes || process.application
+                }) {
+                    let selected = self.selected_pid == Some(process.pid);
+                    if process_button(
+                        ui,
+                        selected,
+                        process.active,
+                        self.process_icons.get(&process.pid),
+                        &process.name,
+                        &format!("PID {}", process.pid),
+                    ) {
+                        next_pid = Some(process.pid);
+                    }
+                }
+            });
         if let Some(pid) = next_pid {
             self.selected_pid = Some(pid);
             self.selected_event = self
@@ -203,6 +302,26 @@ impl AppWatch {
             });
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.menu_button("Proxy relaunch", |ui| {
+                    ui.add_enabled_ui(self.selected_pid.is_some(), |ui| {
+                        if ui.button("Relaunch selected app").clicked() {
+                            self.runtime.relaunch_through_proxy(self.selected_pid);
+                            self.toast = Some("Relaunching the selected app through the proxy…".into());
+                            ui.close();
+                        }
+                    });
+                    if ui.button("Relaunch all open apps").clicked() {
+                        self.confirm_relaunch_all = true;
+                        ui.close();
+                    }
+                    ui.separator();
+                    ui.label(RichText::new("Save your work first: relaunched apps are force-closed.").size(10.0).color(DANGER));
+                    ui.label(
+                        RichText::new("Warning: If a game is open that uses kernel-level anti-cheat, such as a Riot Games title, relaunching it through a proxy may flag it.")
+                            .size(10.0)
+                            .color(WARNING),
+                    );
+                });
                 if secondary_button(ui, "Export JSON").clicked() {
                     self.toast = Some("Export becomes available when storage is connected.".into());
                 }
@@ -628,6 +747,42 @@ impl AppWatch {
             );
         }
     }
+
+    fn relaunch_confirmation(&mut self, context: &egui::Context) {
+        if !self.confirm_relaunch_all {
+            return;
+        }
+        let mut confirmed = false;
+        let mut cancelled = false;
+        egui::Window::new("Relaunch all open apps?")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(context, |ui| {
+                ui.label("This force-closes and restarts every visible desktop app with the AppWatch proxy settings. Save your work first.");
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new("Warning: If a game is open that uses kernel-level anti-cheat, such as a Riot Games title, relaunching it through a proxy may flag it.")
+                        .color(WARNING),
+                );
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if primary_button(ui, "Relaunch all").clicked() {
+                        confirmed = true;
+                    }
+                    if secondary_button(ui, "Cancel").clicked() {
+                        cancelled = true;
+                    }
+                });
+            });
+        if confirmed {
+            self.runtime.relaunch_through_proxy(None);
+            self.toast = Some("Relaunching open apps through the proxy…".into());
+            self.confirm_relaunch_all = false;
+        } else if cancelled {
+            self.confirm_relaunch_all = false;
+        }
+    }
 }
 
 impl eframe::App for AppWatch {
@@ -682,6 +837,7 @@ impl eframe::App for AppWatch {
                     ui.label(RichText::new(error).size(10.0).color(DANGER));
                 }
             });
+        self.relaunch_confirmation(ui.ctx());
     }
 }
 

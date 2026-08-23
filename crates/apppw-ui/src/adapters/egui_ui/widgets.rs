@@ -10,6 +10,7 @@ pub(super) fn process_button(
     ui: &mut egui::Ui,
     selected: bool,
     active: bool,
+    icon: Option<&egui::TextureHandle>,
     name: &str,
     detail: &str,
 ) -> bool {
@@ -33,6 +34,9 @@ pub(super) fn process_button(
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.horizontal(|ui| {
+                if let Some(icon) = icon {
+                    ui.add(egui::Image::new(icon).fit_to_exact_size(egui::vec2(24.0, 24.0)));
+                }
                 ui.label(
                     RichText::new("●")
                         .size(9.0)

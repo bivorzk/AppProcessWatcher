@@ -1,12 +1,11 @@
 use std::{
     collections::HashMap,
-    env,
-    fs,
+    env, fs,
     net::SocketAddr,
     path::PathBuf,
     sync::mpsc::{self, Receiver, Sender, TryRecvError},
     thread::{self, JoinHandle},
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 use apppw_capture::{ConnectionTracker, PacketCapture};
@@ -16,7 +15,10 @@ use apppw_core::{
 };
 use apppw_proxy::{HttpProxy, ProxyEvent};
 use apppw_storage::Database;
-use apppw_windows::{ProcessCollector, SocketProcessResolver};
+use apppw_windows::{
+    ProcessCollector, SocketProcessResolver, application_icon, open_application_pids,
+    relaunch_open_apps_through_proxy, relaunch_through_proxy,
+};
 use eframe::egui;
 use tokio::sync::oneshot;
 
@@ -25,13 +27,19 @@ use crate::domain::{EventKind, NetworkEvent, Process};
 pub enum RuntimeEvent {
     Connection(NetworkEvent),
     Closed(u64),
+    Processes(Vec<Process>),
     Warning(String),
     Error(String),
+}
+
+enum RuntimeAction {
+    Relaunch(Option<u32>),
 }
 
 pub struct Runtime {
     pub processes: Vec<Process>,
     events: Receiver<RuntimeEvent>,
+    actions: Sender<RuntimeAction>,
     shutdown: Sender<()>,
     worker: Option<JoinHandle<()>>,
 }
@@ -48,6 +56,7 @@ impl Runtime {
     pub fn start(context: egui::Context) -> Self {
         let (event_sender, events) = mpsc::channel();
         let (shutdown, shutdown_receiver) = mpsc::channel();
+        let (actions, action_receiver) = mpsc::channel();
         let core_processes = match ProcessCollector.list_processes() {
             Ok(processes) => processes,
             Err(error) => {
@@ -57,22 +66,21 @@ impl Runtime {
                 Vec::new()
             }
         };
-        let processes = core_processes
-            .iter()
-            .cloned()
-            .map(|process| Process {
-                pid: process.pid,
-                name: process.name,
-                active: true,
-            })
-            .collect();
+        let processes = to_ui_processes(&core_processes);
         let worker = thread::spawn(move || {
-            run_components(event_sender, context, core_processes, shutdown_receiver)
+            run_components(
+                event_sender,
+                context,
+                core_processes,
+                shutdown_receiver,
+                action_receiver,
+            )
         });
 
         Self {
             processes,
             events,
+            actions,
             shutdown,
             worker: Some(worker),
         }
@@ -81,6 +89,40 @@ impl Runtime {
     pub fn try_recv(&self) -> Result<RuntimeEvent, TryRecvError> {
         self.events.try_recv()
     }
+
+    pub fn relaunch_through_proxy(&self, pid: Option<u32>) {
+        let _ = self.actions.send(RuntimeAction::Relaunch(pid));
+    }
+}
+
+fn prioritise_processes(processes: &mut [Process]) {
+    processes.sort_by_key(|process| (!process.application, process.name.to_lowercase()));
+}
+
+fn to_ui_processes(processes: &[ProcessInfo]) -> Vec<Process> {
+    let application_pids = open_application_pids().unwrap_or_default();
+    let mut processes = processes
+        .iter()
+        .map(|process| {
+            let application = application_pids.contains(&process.pid);
+            Process {
+                pid: process.pid,
+                name: process.name.clone(),
+                active: true,
+                application,
+                icon_rgba: if application {
+                    process
+                        .executable_path
+                        .as_deref()
+                        .and_then(application_icon)
+                } else {
+                    None
+                },
+            }
+        })
+        .collect::<Vec<_>>();
+    prioritise_processes(&mut processes);
+    processes
 }
 
 impl Drop for Runtime {
@@ -95,8 +137,9 @@ impl Drop for Runtime {
 fn run_components(
     sender: Sender<RuntimeEvent>,
     context: egui::Context,
-    processes: Vec<ProcessInfo>,
+    mut processes: Vec<ProcessInfo>,
     shutdown: Receiver<()>,
+    actions: Receiver<RuntimeAction>,
 ) {
     let capture = match PacketCapture::start() {
         Ok(capture) => Some(capture),
@@ -132,6 +175,7 @@ fn run_components(
     let mut tracker = ConnectionTracker::new();
     let mut correlator = TrafficCorrelator::default();
     let mut packet_counts = HashMap::<u64, u64>::new();
+    let mut last_process_refresh = Instant::now();
 
     while shutdown.try_recv().is_err() {
         let mut changed = false;
@@ -170,6 +214,38 @@ fn run_components(
                 );
                 changed = true;
             }
+        }
+        while let Ok(RuntimeAction::Relaunch(pid)) = actions.try_recv() {
+            let Some(proxy) = &proxy else {
+                let _ = sender.send(RuntimeEvent::Error(
+                    "Cannot relaunch applications because the proxy is offline.".into(),
+                ));
+                continue;
+            };
+            let proxy_url = format!("http://{}", proxy.address);
+            let message = match pid {
+                Some(pid) => relaunch_through_proxy(pid, &proxy_url)
+                    .map(|()| format!("Relaunched PID {pid} through {proxy_url}.")),
+                None => relaunch_open_apps_through_proxy(&proxy_url).map(|summary| {
+                    format!(
+                        "Relaunched {} open app(s) through the proxy; {} could not be relaunched.",
+                        summary.relaunched, summary.failed
+                    )
+                }),
+            };
+            let _ = sender.send(match message {
+                Ok(message) => RuntimeEvent::Warning(message),
+                Err(error) => RuntimeEvent::Error(format!("Proxy relaunch failed: {error}")),
+            });
+            context.request_repaint();
+        }
+        if last_process_refresh.elapsed() >= Duration::from_secs(1) {
+            if let Ok(current_processes) = ProcessCollector.list_processes() {
+                processes = current_processes;
+                let _ = sender.send(RuntimeEvent::Processes(to_ui_processes(&processes)));
+                changed = true;
+            }
+            last_process_refresh = Instant::now();
         }
         if changed {
             context.request_repaint();
@@ -291,7 +367,11 @@ fn resolve_process(
         bytes_received: 0,
     };
     let pid = resolver.resolve_pid(&connection)?;
-    processes.iter().find(|process| process.pid == pid).cloned()
+    processes
+        .iter()
+        .find(|process| process.pid == pid)
+        .cloned()
+        .or_else(|| resolver.resolve(&connection))
 }
 
 fn to_ui_connection(connection: &NetworkConnection, packet_count: u64) -> NetworkEvent {
@@ -467,6 +547,29 @@ impl Drop for ProxyWorker {
 mod tests {
     use super::*;
     use apppw_core::HttpHeader;
+
+    #[test]
+    fn applications_are_listed_before_background_processes() {
+        let mut processes = vec![
+            Process {
+                pid: 1,
+                name: "svchost.exe".into(),
+                active: true,
+                application: false,
+                icon_rgba: None,
+            },
+            Process {
+                pid: 2,
+                name: "Browser.exe".into(),
+                active: true,
+                application: true,
+                icon_rgba: None,
+            },
+        ];
+
+        prioritise_processes(&mut processes);
+        assert_eq!(processes[0].pid, 2);
+    }
 
     #[test]
     fn connection_conversion_does_not_invent_http_data() {

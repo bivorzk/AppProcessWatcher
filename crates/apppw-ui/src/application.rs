@@ -1,6 +1,12 @@
 use crate::domain::{EventKind, NetworkEvent, Process};
 
 #[derive(Clone, Copy, PartialEq)]
+pub enum ProcessTab {
+    Applications,
+    Processes,
+}
+
+#[derive(Clone, Copy, PartialEq)]
 pub enum DetailTab {
     Headers,
     RequestBody,
@@ -43,6 +49,8 @@ pub struct AppState {
     pub last_tick: std::time::Instant,
     pub toast: Option<String>,
     pub capture_error: Option<String>,
+    pub confirm_relaunch_all: bool,
+    pub process_tab: ProcessTab,
 }
 
 impl AppState {
@@ -61,6 +69,8 @@ impl AppState {
             last_tick: std::time::Instant::now(),
             toast: None,
             capture_error: None,
+            confirm_relaunch_all: false,
+            process_tab: ProcessTab::Applications,
         }
     }
 
@@ -72,11 +82,24 @@ impl AppState {
         self.events
             .iter()
             .enumerate()
-            .filter(|(_, event)| self.selected_pid.is_none_or(|pid| event.pid == Some(pid)))
+            .filter(|(_, event)| self.event_matches_selected_process(event))
             .filter(|(_, event)| !self.https_only || event.kind == EventKind::Https)
             .filter(|(_, event)| matches_filter(event, &self.filter))
             .map(|(index, _)| index)
             .collect()
+    }
+
+    fn event_matches_selected_process(&self, event: &NetworkEvent) -> bool {
+        let Some(pid) = self.selected_pid else {
+            return true;
+        };
+        event.pid == Some(pid)
+            || (self.process_tab == ProcessTab::Applications
+                && self
+                    .processes
+                    .iter()
+                    .find(|process| process.pid == pid)
+                    .is_some_and(|process| event.process.eq_ignore_ascii_case(&process.name)))
     }
 
     pub fn selected_process_name(&self) -> String {
@@ -193,5 +216,42 @@ mod tests {
         let mut state = AppState::new(Vec::new(), vec![event, tcp_event]);
         state.https_only = true;
         assert_eq!(state.visible_event_indices(), vec![0]);
+    }
+
+    #[test]
+    fn application_selection_includes_matching_child_processes() {
+        let process = Process {
+            pid: 42,
+            name: "browser.exe".into(),
+            active: true,
+            application: true,
+            icon_rgba: None,
+        };
+        let event = NetworkEvent {
+            id: 1,
+            pid: Some(99),
+            process: "Browser.exe".into(),
+            method: "TCP".into(),
+            host: "example.com".into(),
+            path: String::new(),
+            status: None,
+            kind: EventKind::Tcp,
+            bytes_sent: 0,
+            bytes_received: 0,
+            packet_count: 1,
+            duration_ms: None,
+            local: "127.0.0.1:50000".into(),
+            remote: "93.184.216.34:443".into(),
+            request_headers: Vec::new(),
+            response_headers: Vec::new(),
+            request_body: None,
+            response_body: None,
+        };
+        let mut state = AppState::new(vec![process], vec![event]);
+        state.selected_pid = Some(42);
+
+        assert_eq!(state.visible_event_indices(), vec![0]);
+        state.process_tab = ProcessTab::Processes;
+        assert!(state.visible_event_indices().is_empty());
     }
 }

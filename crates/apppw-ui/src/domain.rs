@@ -3,6 +3,8 @@ pub struct Process {
     pub pid: u32,
     pub name: String,
     pub active: bool,
+    pub application: bool,
+    pub icon_rgba: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
