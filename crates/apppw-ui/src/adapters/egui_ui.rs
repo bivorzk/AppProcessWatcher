@@ -31,6 +31,7 @@ pub struct AppWatch {
     state: AppState,
     runtime: Runtime,
     process_icons: HashMap<u32, egui::TextureHandle>,
+    revealed_response_bodies: BTreeSet<u64>,
 }
 
 impl std::ops::Deref for AppWatch {
@@ -72,6 +73,7 @@ impl AppWatch {
             state,
             runtime,
             process_icons,
+            revealed_response_bodies: BTreeSet::new(),
         }
     }
 
@@ -605,6 +607,7 @@ impl AppWatch {
             .and_then(|id| self.events.iter().position(|event| event.id == id));
         let detail_tab = self.detail_tab;
         let mut next_tab = None;
+        let mut reveal_response = None;
         Self::panel().show(ui, |ui| {
             let Some(selected) = selected else {
                 ui.vertical_centered(|ui| {
@@ -691,7 +694,18 @@ impl AppWatch {
                     key_values(ui, &rows);
                     if let Some(body) = &event.response_body {
                         ui.add_space(8.0);
-                        self.body_preview(ui, Some(body));
+                        if is_probably_text(body)
+                            || self.revealed_response_bodies.contains(&event.id)
+                        {
+                            self.body_preview(ui, Some(body));
+                        } else if secondary_button(
+                            ui,
+                            "Encrypted or encoded response — click to view anyway",
+                        )
+                        .clicked()
+                        {
+                            reveal_response = Some(event.id);
+                        }
                     }
                 }
                 DetailTab::Timing => key_values(
@@ -730,6 +744,9 @@ impl AppWatch {
         });
         if let Some(tab) = next_tab {
             self.detail_tab = tab;
+        }
+        if let Some(id) = reveal_response {
+            self.revealed_response_bodies.insert(id);
         }
     }
 
@@ -900,4 +917,23 @@ fn header_rows(headers: &[apppw_core::HttpHeader]) -> Vec<(&str, String)> {
         .iter()
         .map(|header| (header.name.as_str(), header.value.clone()))
         .collect()
+}
+
+fn is_probably_text(body: &[u8]) -> bool {
+    let preview = &body[..body.len().min(4096)];
+    std::str::from_utf8(preview).is_ok_and(|text| {
+        text.chars()
+            .all(|character| !character.is_control() || matches!(character, '\n' | '\r' | '\t'))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_probably_text;
+
+    #[test]
+    fn binary_responses_require_explicit_reveal() {
+        assert!(is_probably_text(br#"{"status":"ok"}"#));
+        assert!(!is_probably_text(&[0x1f, 0x8b, 0x08, 0x00, 0xff, 0x00]));
+    }
 }

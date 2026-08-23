@@ -149,21 +149,50 @@ fn apply_proxy_settings<'a>(
     proxy: &str,
 ) -> &'a mut Command {
     command.env("HTTP_PROXY", proxy).env("HTTPS_PROXY", proxy);
-    if executable
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| {
-            matches!(
-                name.to_ascii_lowercase().as_str(),
-                "chrome.exe" | "discord.exe"
-            )
-        })
-    {
+    let directory = executable
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let flags = format!("--proxy-server={proxy} --disable-quic");
+    let electron_or_cef = has_chromium_files(directory)
+        || std::fs::read_dir(directory).is_ok_and(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .any(|entry| entry.path().is_dir() && has_chromium_files(&entry.path()))
+        });
+    if electron_or_cef {
         command
             .arg(format!("--proxy-server={proxy}"))
             .arg("--disable-quic");
     }
+    if ["Qt6WebEngineCore.dll", "Qt5WebEngineCore.dll"]
+        .iter()
+        .any(|file| directory.join(file).exists())
+    {
+        command.env("QTWEBENGINE_CHROMIUM_FLAGS", &flags);
+    }
+    if [
+        directory.join("WebView2Loader.dll"),
+        directory.join("runtimes/win-x64/native/WebView2Loader.dll"),
+        directory.join("runtimes/win-x86/native/WebView2Loader.dll"),
+        directory.join("runtimes/win-arm64/native/WebView2Loader.dll"),
+    ]
+    .iter()
+    .any(|path| path.exists())
+    {
+        command.env("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", &flags);
+    }
     command
+}
+
+fn has_chromium_files(directory: &std::path::Path) -> bool {
+    [
+        directory.join("chrome_elf.dll"),
+        directory.join("libcef.dll"),
+        directory.join("resources").join("app.asar"),
+    ]
+    .iter()
+    .any(|path| path.exists())
+        || (directory.join("icudtl.dat").exists() && directory.join("resources.pak").exists())
 }
 
 pub fn relaunch_open_apps_through_proxy(proxy: &str) -> Result<RelaunchSummary, String> {
@@ -438,24 +467,47 @@ mod tests {
     }
 
     #[test]
-    fn chromium_apps_receive_native_proxy_and_quic_flags() {
-        for executable in ["chrome.exe", "Discord.EXE"] {
-            let mut command = Command::new(executable);
-            apply_proxy_settings(
-                &mut command,
-                std::path::Path::new(executable),
-                "http://127.0.0.1:8877",
-            );
-            let arguments = command
-                .get_args()
-                .map(|argument| argument.to_string_lossy())
-                .collect::<Vec<_>>();
+    fn chromium_runtime_files_enable_the_matching_proxy_settings() {
+        let directory =
+            std::env::temp_dir().join(format!("apppw-runtime-test-{}", std::process::id()));
+        let resources = directory.join("resources");
+        let version = directory.join("151.0.7922.170");
+        std::fs::create_dir_all(&resources).unwrap();
+        std::fs::create_dir_all(&version).unwrap();
+        std::fs::write(version.join("chrome_elf.dll"), []).unwrap();
+        std::fs::write(directory.join("Qt6WebEngineCore.dll"), []).unwrap();
+        std::fs::write(directory.join("WebView2Loader.dll"), []).unwrap();
+        let executable = directory.join("application.exe");
+        let mut command = Command::new(&executable);
+        apply_proxy_settings(&mut command, &executable, "http://127.0.0.1:8877");
 
-            assert_eq!(
-                arguments,
-                ["--proxy-server=http://127.0.0.1:8877", "--disable-quic"]
-            );
-        }
+        let arguments = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy())
+            .collect::<Vec<_>>();
+        let variables = command
+            .get_envs()
+            .filter_map(|(name, value)| Some((name.to_str()?, value?.to_str()?)))
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(
+            arguments,
+            ["--proxy-server=http://127.0.0.1:8877", "--disable-quic"]
+        );
+        assert_eq!(
+            variables.get("QTWEBENGINE_CHROMIUM_FLAGS"),
+            Some(&"--proxy-server=http://127.0.0.1:8877 --disable-quic")
+        );
+        assert_eq!(
+            variables.get("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"),
+            Some(&"--proxy-server=http://127.0.0.1:8877 --disable-quic")
+        );
+
+        std::fs::remove_file(version.join("chrome_elf.dll")).unwrap();
+        std::fs::remove_file(directory.join("Qt6WebEngineCore.dll")).unwrap();
+        std::fs::remove_file(directory.join("WebView2Loader.dll")).unwrap();
+        std::fs::remove_dir(version).unwrap();
+        std::fs::remove_dir(resources).unwrap();
+        std::fs::remove_dir(directory).unwrap();
     }
 
     #[test]
