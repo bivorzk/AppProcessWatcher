@@ -1,4 +1,4 @@
-use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, RichText, Stroke};
+use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, RichText, Stroke, TextWrapMode};
 
 use super::theme::*;
 
@@ -111,20 +111,30 @@ pub(super) fn status_colour(status: Option<u16>) -> Color32 {
 }
 
 pub(super) fn key_values(ui: &mut egui::Ui, rows: &[(&str, String)]) {
-    egui::Grid::new("details_grid")
-        .num_columns(2)
-        .spacing([28.0, 9.0])
+    egui::ScrollArea::both()
+        .id_salt("details_values")
+        .max_height(220.0)
         .show(ui, |ui| {
-            for (key, value) in rows {
-                ui.label(
-                    RichText::new(*key)
-                        .font(bold_font(10.0))
-                        .color(DIM)
-                        .strong(),
-                );
-                ui.label(RichText::new(value).monospace().size(11.0).color(TEXT));
-                ui.end_row();
-            }
+            egui::Grid::new("details_grid")
+                .num_columns(2)
+                .spacing([28.0, 9.0])
+                .show(ui, |ui| {
+                    for (key, value) in rows {
+                        ui.label(
+                            RichText::new(*key)
+                                .font(bold_font(10.0))
+                                .color(DIM)
+                                .strong(),
+                        );
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(value).monospace().size(11.0).color(TEXT),
+                            )
+                            .wrap_mode(TextWrapMode::Extend),
+                        );
+                        ui.end_row();
+                    }
+                });
         });
 }
 
@@ -135,7 +145,19 @@ pub(super) fn code_block(ui: &mut egui::Ui, text: &str) {
         .corner_radius(CornerRadius::same(5))
         .inner_margin(Margin::same(12))
         .show(ui, |ui| {
-            ui.label(RichText::new(text).monospace().size(11.0).color(ACCENT_2));
+            egui::ScrollArea::both()
+                .id_salt("body_preview")
+                .max_height(260.0)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(text).monospace().size(11.0).color(ACCENT_2),
+                        )
+                        .wrap_mode(TextWrapMode::Extend)
+                        .selectable(true),
+                    );
+                });
         });
 }
 

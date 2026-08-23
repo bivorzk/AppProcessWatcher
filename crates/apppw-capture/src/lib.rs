@@ -1,8 +1,13 @@
 use std::{
     collections::HashMap,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
-    sync::mpsc::{self, Receiver},
-    thread,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, UdpSocket},
+    process::Command,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, RecvTimeoutError},
+    },
+    thread::{self, JoinHandle},
     time::{Duration, SystemTime},
 };
 
@@ -11,30 +16,57 @@ use apppw_core::{
     NetworkProtocol,
 };
 use etherparse::{InternetSlice, SlicedPacket, TransportSlice};
-use windivert::prelude::{WinDivert, WinDivertFlags};
+use windivert::prelude::{WinDivert, WinDivertError, WinDivertFlags, WinDivertOpenError};
 
 pub const CONNECTION_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct PacketCapture;
 
+pub struct CaptureHandle {
+    receiver: Receiver<NetworkEvent>,
+    shutdown: Arc<AtomicBool>,
+    worker: Option<JoinHandle<()>>,
+}
+
 impl PacketCapture {
-    pub fn start() -> Result<Receiver<NetworkEvent>, Box<dyn std::error::Error>> {
+    pub fn start() -> Result<CaptureHandle, Box<dyn std::error::Error>> {
         Self::start_with_raw_packets(false)
     }
 
     pub fn start_with_raw_packets(
         retain_raw_packets: bool,
-    ) -> Result<Receiver<NetworkEvent>, Box<dyn std::error::Error>> {
-        let flags = WinDivertFlags::new().set_sniff();
-        let handle = WinDivert::network("(tcp or udp)", 0, flags)?;
+    ) -> Result<CaptureHandle, Box<dyn std::error::Error>> {
+        let open = || WinDivert::network("(tcp or udp)", 0, WinDivertFlags::new().set_sniff());
+        let handle = match open() {
+            Err(error) if stale_driver_registration(&error) => {
+                let deleted = Command::new("sc.exe")
+                    .args(["delete", "WinDivert"])
+                    .status()
+                    .is_ok_and(|status| status.success());
+                if !deleted {
+                    return Err(error.into());
+                }
+                open()?
+            }
+            result => result?,
+        };
         let (sender, receiver) = mpsc::channel();
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let worker_shutdown = shutdown.clone();
 
-        thread::spawn(move || {
+        let worker = thread::spawn(move || {
+            let mut buffer = vec![0_u8; u16::MAX as usize];
             loop {
-                let packet = match handle.recv(None) {
+                let packet = match handle.recv(Some(&mut buffer)) {
                     Ok(packet) => packet,
-                    Err(_) => break,
+                    Err(error) => {
+                        eprintln!("WinDivert capture stopped: {error}");
+                        break;
+                    }
                 };
+                if worker_shutdown.load(Ordering::Relaxed) {
+                    break;
+                }
                 if let Some(packet) = parse_packet(
                     packet.data.as_ref(),
                     packet.address.outbound(),
@@ -46,8 +78,34 @@ impl PacketCapture {
             }
         });
 
-        Ok(receiver)
+        Ok(CaptureHandle {
+            receiver,
+            shutdown,
+            worker: Some(worker),
+        })
     }
+}
+
+impl CaptureHandle {
+    pub fn recv_timeout(&self, timeout: Duration) -> Result<NetworkEvent, RecvTimeoutError> {
+        self.receiver.recv_timeout(timeout)
+    }
+}
+
+impl Drop for CaptureHandle {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+        // ponytail: a loopback datagram wakes blocking recv; use overlapped I/O if filters become configurable.
+        let _ =
+            UdpSocket::bind("127.0.0.1:0").and_then(|socket| socket.send_to(&[0], "127.0.0.1:9"));
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+fn stale_driver_registration(error: &WinDivertError) -> bool {
+    matches!(error, WinDivertError::Open(WinDivertOpenError::MissingSYS))
 }
 
 pub fn parse_packet(
@@ -79,7 +137,7 @@ pub fn parse_packet(
         TransportSlice::Udp(header) => (
             header.source_port(),
             header.destination_port(),
-            NetworkProtocol::UDP,
+            classify_udp_protocol(packet.payload),
             false,
             false,
         ),
@@ -106,6 +164,18 @@ pub fn parse_packet(
         tcp_fin,
         tcp_rst,
     })
+}
+
+fn classify_udp_protocol(payload: &[u8]) -> NetworkProtocol {
+    // QUIC long headers always set both the header-form and fixed bits.
+    if payload
+        .first()
+        .is_some_and(|first_byte| first_byte & 0b1100_0000 == 0b1100_0000)
+    {
+        NetworkProtocol::QUIC
+    } else {
+        NetworkProtocol::UDP
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -276,6 +346,29 @@ mod tests {
         assert_eq!(packet.source_port, Some(50_000));
         assert_eq!(packet.destination_port, Some(443));
         assert!(packet.raw_packet.is_none());
+    }
+
+    #[test]
+    fn identifies_quic_long_header_datagrams() {
+        let builder = PacketBuilder::ipv4([192, 168, 1, 10], [1, 1, 1, 1], 64).udp(50_000, 443);
+        let payload = [0xc0, 0, 0, 0, 1];
+        let mut bytes = Vec::with_capacity(builder.size(payload.len()));
+        builder.write(&mut bytes, &payload).unwrap();
+
+        let packet = parse_packet(&bytes, true, false).unwrap();
+
+        assert_eq!(packet.protocol, NetworkProtocol::QUIC);
+    }
+
+    #[test]
+    fn keeps_non_quic_datagrams_as_udp() {
+        assert_eq!(classify_udp_protocol(&[0x80]), NetworkProtocol::UDP);
+    }
+
+    #[test]
+    fn missing_driver_error_triggers_stale_service_repair() {
+        let error = WinDivertError::Open(WinDivertOpenError::MissingSYS);
+        assert!(stale_driver_registration(&error));
     }
 
     #[test]

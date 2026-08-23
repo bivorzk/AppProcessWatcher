@@ -1,4 +1,4 @@
-use crate::domain::{NetworkEvent, Process};
+use crate::domain::{EventKind, NetworkEvent, Process};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum DetailTab {
@@ -37,6 +37,7 @@ pub struct AppState {
     pub detail_tab: DetailTab,
     pub filter: String,
     pub filter_error: Option<String>,
+    pub https_only: bool,
     pub recording: bool,
     pub session_seconds: u64,
     pub last_tick: std::time::Instant,
@@ -54,6 +55,7 @@ impl AppState {
             detail_tab: DetailTab::Headers,
             filter: String::new(),
             filter_error: None,
+            https_only: false,
             recording: true,
             session_seconds: 0,
             last_tick: std::time::Instant::now(),
@@ -62,17 +64,19 @@ impl AppState {
         }
     }
 
-    pub fn visible_events(&self) -> Vec<&NetworkEvent> {
+    pub fn visible_event_indices(&self) -> Vec<usize> {
+        if validate_filter(&self.filter).is_err() {
+            return Vec::new();
+        }
+
         self.events
             .iter()
-            .filter(|event| self.selected_pid.is_none_or(|pid| event.pid == Some(pid)))
-            .filter(|event| matches_filter(event, &self.filter))
+            .enumerate()
+            .filter(|(_, event)| self.selected_pid.is_none_or(|pid| event.pid == Some(pid)))
+            .filter(|(_, event)| !self.https_only || event.kind == EventKind::Https)
+            .filter(|(_, event)| matches_filter(event, &self.filter))
+            .map(|(index, _)| index)
             .collect()
-    }
-
-    pub fn selected_event(&self) -> Option<&NetworkEvent> {
-        self.selected_event
-            .and_then(|id| self.events.iter().find(|event| event.id == id))
     }
 
     pub fn selected_process_name(&self) -> String {
@@ -120,8 +124,8 @@ pub fn validate_filter(filter: &str) -> Result<(), String> {
 }
 
 fn matches_filter(event: &NetworkEvent, filter: &str) -> bool {
-    if validate_filter(filter).is_err() {
-        return false;
+    if filter.trim().is_empty() {
+        return true;
     }
     let searchable = event.search_text();
     filter.split_whitespace().all(|token| {
@@ -182,5 +186,12 @@ mod tests {
         assert!(!matches_filter(&event, "method:POST"));
         assert!(validate_filter("port:not-a-number").is_err());
         assert!(validate_filter("owner:me").is_err());
+
+        let mut tcp_event = event.clone();
+        tcp_event.id = 2;
+        tcp_event.kind = EventKind::Tcp;
+        let mut state = AppState::new(Vec::new(), vec![event, tcp_event]);
+        state.https_only = true;
+        assert_eq!(state.visible_event_indices(), vec![0]);
     }
 }

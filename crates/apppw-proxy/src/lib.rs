@@ -42,12 +42,18 @@ pub const DEFAULT_PROXY_ADDRESS: SocketAddr =
     SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8877);
 pub const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 
+#[derive(Debug, Clone)]
+pub struct ProxyEvent {
+    pub client_address: SocketAddr,
+    pub request: HttpRequestInfo,
+}
+
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 type ProxyClient = Client<HttpsConnector<HttpConnector>, Full<Bytes>>;
 
 pub struct HttpProxy {
     bind_address: SocketAddr,
-    event_sender: mpsc::UnboundedSender<HttpRequestInfo>,
+    event_sender: mpsc::UnboundedSender<ProxyEvent>,
     capture_bodies: bool,
     certificate_authority: Option<Arc<LocalCertificateAuthority>>,
 }
@@ -60,7 +66,7 @@ pub struct ProxyHandle {
 
 struct ProxyRuntime {
     client: ProxyClient,
-    event_sender: mpsc::UnboundedSender<HttpRequestInfo>,
+    event_sender: mpsc::UnboundedSender<ProxyEvent>,
     next_id: Arc<AtomicU64>,
     capture_bodies: bool,
     certificate_authority: Option<Arc<LocalCertificateAuthority>>,
@@ -72,10 +78,7 @@ struct LocalCertificateAuthority {
 }
 
 impl HttpProxy {
-    pub fn new(
-        bind_address: SocketAddr,
-        event_sender: mpsc::UnboundedSender<HttpRequestInfo>,
-    ) -> Self {
+    pub fn new(bind_address: SocketAddr, event_sender: mpsc::UnboundedSender<ProxyEvent>) -> Self {
         Self {
             bind_address,
             event_sender,
@@ -84,7 +87,7 @@ impl HttpProxy {
         }
     }
 
-    pub fn localhost(event_sender: mpsc::UnboundedSender<HttpRequestInfo>) -> Self {
+    pub fn localhost(event_sender: mpsc::UnboundedSender<ProxyEvent>) -> Self {
         Self::new(DEFAULT_PROXY_ADDRESS, event_sender)
     }
 
@@ -120,12 +123,16 @@ impl HttpProxy {
                 tokio::select! {
                     _ = &mut shutdown_receiver => break,
                     accepted = listener.accept() => {
-                        let (stream, _) = accepted?;
+                        let (stream, client_address) = accepted?;
                         let runtime = runtime.clone();
                         tokio::spawn(async move {
                             let service = service_fn(move |request| {
                                 let runtime = runtime.clone();
-                                async move { Ok::<_, Infallible>(runtime.handle(request).await) }
+                                async move {
+                                    Ok::<_, Infallible>(
+                                        runtime.handle(request, client_address).await
+                                    )
+                                }
                             });
                             let _ = http1::Builder::new()
                                 .serve_connection(TokioIo::new(stream), service)
@@ -157,11 +164,15 @@ impl ProxyHandle {
 }
 
 impl ProxyRuntime {
-    async fn handle(self: Arc<Self>, request: Request<Incoming>) -> Response<Full<Bytes>> {
+    async fn handle(
+        self: Arc<Self>,
+        request: Request<Incoming>,
+        client_address: SocketAddr,
+    ) -> Response<Full<Bytes>> {
         if request.method() == Method::CONNECT {
-            return self.handle_connect(request).await;
+            return self.handle_connect(request, client_address).await;
         }
-        self.forward(request, None, None)
+        self.forward(request, None, None, client_address)
             .await
             .unwrap_or_else(error_response)
     }
@@ -169,6 +180,7 @@ impl ProxyRuntime {
     async fn handle_connect(
         self: Arc<Self>,
         mut request: Request<Incoming>,
+        client_address: SocketAddr,
     ) -> Response<Full<Bytes>> {
         let Some(authority) = request.uri().authority().cloned() else {
             return text_response(StatusCode::BAD_REQUEST, "CONNECT target is missing");
@@ -194,7 +206,7 @@ impl ProxyRuntime {
                     async move {
                         Ok::<_, Infallible>(
                             runtime
-                                .forward(request, Some("https"), Some(&host))
+                                .forward(request, Some("https"), Some(&host), client_address)
                                 .await
                                 .unwrap_or_else(error_response),
                         )
@@ -225,6 +237,7 @@ impl ProxyRuntime {
         request: Request<Incoming>,
         forced_scheme: Option<&str>,
         default_host: Option<&str>,
+        client_address: SocketAddr,
     ) -> Result<Response<Full<Bytes>>, BoxError> {
         let started_at = SystemTime::now();
         let timer = Instant::now();
@@ -290,7 +303,10 @@ impl ProxyRuntime {
             started_at,
             duration_ms: Some(timer.elapsed().as_millis()),
         };
-        let _ = self.event_sender.send(info);
+        let _ = self.event_sender.send(ProxyEvent {
+            client_address,
+            request: info,
+        });
         Ok(Response::from_parts(
             response_parts,
             Full::new(response_bytes),
@@ -399,10 +415,11 @@ mod tests {
 
         assert!(String::from_utf8_lossy(&response).contains("upstream"));
         let event = events.recv().await.unwrap();
-        assert_eq!(event.path, "/hello");
-        assert_eq!(event.status_code, Some(200));
+        assert_eq!(event.request.path, "/hello");
+        assert_eq!(event.request.status_code, Some(200));
         assert_eq!(
             event
+                .request
                 .request_headers
                 .iter()
                 .find(|header| header.name == "authorization")

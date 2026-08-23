@@ -5,6 +5,7 @@ use eframe::egui::{self, Align, Color32, CornerRadius, Frame, Layout, Margin, Ri
 use crate::{
     application::{AppState, DetailTab, validate_filter},
     domain::EventKind,
+    runtime::{Runtime, RuntimeEvent},
 };
 
 mod theme;
@@ -28,6 +29,7 @@ impl EventKind {
 
 pub struct AppWatch {
     state: AppState,
+    runtime: Runtime,
 }
 
 impl std::ops::Deref for AppWatch {
@@ -45,9 +47,39 @@ impl std::ops::DerefMut for AppWatch {
 }
 
 impl AppWatch {
-    pub fn new(context: &eframe::CreationContext<'_>, state: AppState) -> Self {
+    const MAX_RUNTIME_EVENTS_PER_FRAME: usize = 1_024;
+    const MAX_BODY_PREVIEW_BYTES: usize = 64 * 1_024;
+
+    pub fn new(context: &eframe::CreationContext<'_>, state: AppState, runtime: Runtime) -> Self {
         apply_theme(&context.egui_ctx);
-        Self { state }
+        Self { state, runtime }
+    }
+
+    fn receive_runtime_events(&mut self, context: &egui::Context) {
+        for index in 0..Self::MAX_RUNTIME_EVENTS_PER_FRAME {
+            let Ok(event) = self.runtime.try_recv() else {
+                break;
+            };
+            match event {
+                RuntimeEvent::Connection(event) => {
+                    if self.recording {
+                        if let Some(existing) =
+                            self.events.iter_mut().find(|item| item.id == event.id)
+                        {
+                            *existing = event;
+                        } else {
+                            self.events.push(event);
+                        }
+                    }
+                }
+                RuntimeEvent::Closed(id) => self.events.retain(|event| event.id != id),
+                RuntimeEvent::Warning(warning) => self.toast = Some(warning),
+                RuntimeEvent::Error(error) => self.capture_error = Some(error),
+            }
+            if index + 1 == Self::MAX_RUNTIME_EVENTS_PER_FRAME {
+                context.request_repaint();
+            }
+        }
     }
 
     fn panel() -> Frame {
@@ -87,7 +119,7 @@ impl AppWatch {
             self.selected_pid.is_none(),
             true,
             "All processes",
-            "6 apps",
+            &format!("{} apps", self.processes.len()),
         ) {
             self.selected_pid = None;
             self.selected_event = None;
@@ -100,7 +132,7 @@ impl AppWatch {
                 ui,
                 selected,
                 process.active,
-                process.name,
+                &process.name,
                 &format!("PID {}", process.pid),
             ) {
                 next_pid = Some(process.pid);
@@ -111,7 +143,7 @@ impl AppWatch {
             self.selected_event = self
                 .events
                 .iter()
-                .find(|event| event.pid == pid)
+                .find(|event| event.pid == Some(pid))
                 .map(|event| event.id);
         }
 
@@ -124,12 +156,24 @@ impl AppWatch {
                 .inner_margin(Margin::same(10))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("●").color(SUCCESS).size(11.0));
                         ui.label(
-                            RichText::new("CAPTURE ONLINE")
-                                .font(bold_font(10.0))
-                                .color(MUTED)
-                                .strong(),
+                            RichText::new("●")
+                                .color(if self.capture_error.is_none() {
+                                    SUCCESS
+                                } else {
+                                    DANGER
+                                })
+                                .size(11.0),
+                        );
+                        ui.label(
+                            RichText::new(if self.capture_error.is_none() {
+                                "CAPTURE ONLINE"
+                            } else {
+                                "CAPTURE OFFLINE"
+                            })
+                            .font(bold_font(10.0))
+                            .color(MUTED)
+                            .strong(),
                         );
                     });
                     ui.label(
@@ -194,45 +238,36 @@ impl AppWatch {
         });
     }
 
-    fn stats(&self, ui: &mut egui::Ui) {
-        let events = self.visible_events();
-        let sent = if events.is_empty() { "0 B" } else { "4.8 MB" };
-        let received = if events.is_empty() { "0 B" } else { "43.1 MB" };
+    fn stats(&self, ui: &mut egui::Ui, visible: &[usize]) {
+        let events = visible.iter().map(|&index| &self.events[index]);
+        let sent = format_bytes(events.clone().map(|event| event.bytes_sent).sum());
+        let received = format_bytes(events.clone().map(|event| event.bytes_received).sum());
+        let packets: u64 = events.clone().map(|event| event.packet_count).sum();
         let http_count = events
-            .iter()
+            .clone()
             .filter(|event| matches!(event.kind, EventKind::Http | EventKind::Https))
             .count();
         let hosts = events
-            .iter()
-            .map(|event| event.host)
+            .clone()
+            .map(|event| &event.host)
             .collect::<BTreeSet<_>>()
             .len();
-        let completed: Vec<u64> = events
-            .iter()
+        let (duration_total, duration_count) = events
             .filter_map(|event| event.duration_ms)
-            .collect();
-        let average = if completed.is_empty() {
+            .fold((0_u64, 0_u64), |(total, count), duration| {
+                (total.saturating_add(duration), count + 1)
+            });
+        let average = if duration_count == 0 {
             "---".into()
         } else {
-            format!(
-                "{} ms",
-                completed.iter().sum::<u64>() / completed.len() as u64
-            )
+            format!("{} ms", duration_total / duration_count)
         };
         let cards = [
-            ("ACTIVE", events.len().to_string(), ACCENT),
+            ("ACTIVE", visible.len().to_string(), ACCENT),
             ("HTTP REQUESTS", http_count.to_string(), SUCCESS),
-            (
-                "PACKETS",
-                if events.is_empty() {
-                    "0".into()
-                } else {
-                    "12,418".into()
-                },
-                ACCENT_2,
-            ),
-            ("UPLOADED", sent.into(), WARNING),
-            ("DOWNLOADED", received.into(), ACCENT),
+            ("PACKETS", packets.to_string(), ACCENT_2),
+            ("UPLOADED", sent, WARNING),
+            ("DOWNLOADED", received, ACCENT),
             ("HOSTS", hosts.to_string(), SUCCESS),
             ("AVG RESPONSE", average, ACCENT_2),
         ];
@@ -262,7 +297,34 @@ impl AppWatch {
         });
     }
 
-    fn filter_bar(&mut self, ui: &mut egui::Ui) {
+    fn filter_bar(&mut self, ui: &mut egui::Ui, visible_count: usize) {
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("TRAFFIC VIEW")
+                    .font(bold_font(9.0))
+                    .color(DIM)
+                    .strong(),
+            );
+            for (https_only, label) in [(false, "ALL TRAFFIC"), (true, "HTTPS REQUESTS")] {
+                if ui
+                    .selectable_label(
+                        self.https_only == https_only,
+                        RichText::new(label).font(bold_font(10.0)).color(
+                            if self.https_only == https_only {
+                                ACCENT
+                            } else {
+                                MUTED
+                            },
+                        ),
+                    )
+                    .clicked()
+                {
+                    self.https_only = https_only;
+                    self.selected_event = None;
+                }
+            }
+        });
+        ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.label(RichText::new("⌕").size(19.0).color(ACCENT));
             let response = ui.add_sized(
@@ -275,7 +337,7 @@ impl AppWatch {
                 self.filter_error = validate_filter(&self.filter).err();
             }
             ui.label(
-                RichText::new(format!("{} shown", self.visible_events().len()))
+                RichText::new(format!("{visible_count} shown"))
                     .size(10.0)
                     .color(DIM),
             );
@@ -285,8 +347,7 @@ impl AppWatch {
         }
     }
 
-    fn event_table(&mut self, ui: &mut egui::Ui) {
-        let visible_ids: Vec<u64> = self.visible_events().iter().map(|event| event.id).collect();
+    fn event_table(&mut self, ui: &mut egui::Ui, visible: &[usize]) {
         let widths = [70.0, 155.0, 245.0, 62.0, 120.0, 72.0, 78.0, 58.0];
         let headings = [
             "METHOD", "HOST", "PATH", "STATUS", "PROTOCOL", "SENT", "RECEIVED", "TIME",
@@ -314,11 +375,9 @@ impl AppWatch {
         egui::ScrollArea::vertical()
             .max_height(250.0)
             .auto_shrink([false, false])
-            .show(ui, |ui| {
-                for id in visible_ids.iter().copied() {
-                    let Some(event) = self.events.iter().find(|event| event.id == id) else {
-                        continue;
-                    };
+            .show_rows(ui, 34.0, visible.len(), |ui, rows| {
+                for row in rows {
+                    let event = &self.events[visible[row]];
                     let selected = self.selected_event == Some(event.id);
                     let row_fill = if selected {
                         Color32::from_rgb(18, 41, 65)
@@ -339,14 +398,14 @@ impl AppWatch {
                         .inner_margin(Margin::symmetric(8, 8))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
-                                table_cell(ui, event.method, widths[0], event.kind.colour(), true);
-                                table_cell(ui, event.host, widths[1], TEXT, false);
+                                table_cell(ui, &event.method, widths[0], event.kind.colour(), true);
+                                table_cell(ui, &event.host, widths[1], TEXT, false);
                                 table_cell(
                                     ui,
                                     if event.path.is_empty() {
                                         "—"
                                     } else {
-                                        event.path
+                                        &event.path
                                     },
                                     widths[2],
                                     MUTED,
@@ -368,8 +427,20 @@ impl AppWatch {
                                     event.kind.colour(),
                                     false,
                                 );
-                                table_cell(ui, event.sent, widths[5], MUTED, false);
-                                table_cell(ui, event.received, widths[6], MUTED, false);
+                                table_cell(
+                                    ui,
+                                    &format_bytes(event.bytes_sent),
+                                    widths[5],
+                                    MUTED,
+                                    false,
+                                );
+                                table_cell(
+                                    ui,
+                                    &format_bytes(event.bytes_received),
+                                    widths[6],
+                                    MUTED,
+                                    false,
+                                );
                                 table_cell(
                                     ui,
                                     &event
@@ -387,30 +458,31 @@ impl AppWatch {
                         self.selected_event = Some(event.id);
                     }
                 }
-
-                if visible_ids.is_empty() {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(32.0);
-                        ui.label(
-                            RichText::new("NO MATCHING TRAFFIC")
-                                .font(bold_font(12.0))
-                                .color(DIM)
-                                .strong(),
-                        );
-                        ui.label(
-                            RichText::new("Adjust the filter or select another process.")
-                                .color(DIM),
-                        );
-                        ui.add_space(32.0);
-                    });
-                }
             });
+
+        if visible.is_empty() {
+            ui.vertical_centered(|ui| {
+                ui.add_space(24.0);
+                ui.label(
+                    RichText::new("NO MATCHING TRAFFIC")
+                        .font(bold_font(12.0))
+                        .color(DIM)
+                        .strong(),
+                );
+                ui.label(RichText::new("Adjust the filter or select another process.").color(DIM));
+                ui.add_space(24.0);
+            });
+        }
     }
 
     fn details(&mut self, ui: &mut egui::Ui) {
-        let selected = self.selected_event().cloned();
+        let selected = self
+            .selected_event
+            .and_then(|id| self.events.iter().position(|event| event.id == id));
+        let detail_tab = self.detail_tab;
+        let mut next_tab = None;
         Self::panel().show(ui, |ui| {
-            let Some(event) = selected else {
+            let Some(selected) = selected else {
                 ui.vertical_centered(|ui| {
                     ui.add_space(34.0);
                     ui.label(
@@ -426,10 +498,11 @@ impl AppWatch {
                 });
                 return;
             };
+            let event = &self.events[selected];
 
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new(event.method)
+                    RichText::new(&event.method)
                         .font(bold_font(14.0))
                         .strong()
                         .color(event.kind.colour()),
@@ -451,7 +524,7 @@ impl AppWatch {
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 for tab in DetailTab::ALL {
-                    let selected = self.detail_tab == tab;
+                    let selected = detail_tab == tab;
                     if ui
                         .selectable_label(
                             selected,
@@ -459,29 +532,28 @@ impl AppWatch {
                         )
                         .clicked()
                     {
-                        self.detail_tab = tab;
+                        next_tab = Some(tab);
                     }
                 }
             });
             ui.separator();
             ui.add_space(5.0);
 
-            match self.detail_tab {
-                DetailTab::Headers => key_values(
-                    ui,
-                    &[
-                        ("content-type", "application/json".into()),
-                        ("accept", "application/json".into()),
-                        ("authorisation", "[REDACTED]".into()),
-                        ("user-agent", "AppWatch demo client".into()),
-                    ],
-                ),
-                DetailTab::RequestBody => {
-                    code_block(ui, "{\n  \"content\": \"Hello from AppWatch\"\n}")
+            match detail_tab {
+                DetailTab::Headers => {
+                    let rows = header_rows(&event.request_headers);
+                    if rows.is_empty() {
+                        key_values(
+                            ui,
+                            &[("Headers", "Unavailable for encrypted/raw traffic".into())],
+                        );
+                    } else {
+                        key_values(ui, &rows);
+                    }
                 }
-                DetailTab::Response => key_values(
-                    ui,
-                    &[
+                DetailTab::RequestBody => self.body_preview(ui, event.request_body.as_deref()),
+                DetailTab::Response => {
+                    let mut rows = vec![
                         (
                             "Status",
                             event.status.map_or_else(
@@ -489,32 +561,36 @@ impl AppWatch {
                                 |value| format!("{value} OK"),
                             ),
                         ),
-                        ("Content type", "application/json".into()),
-                        ("Transferred", event.received.into()),
-                    ],
-                ),
+                        ("Transferred", format_bytes(event.bytes_received)),
+                    ];
+                    rows.extend(header_rows(&event.response_headers));
+                    key_values(ui, &rows);
+                    if let Some(body) = &event.response_body {
+                        ui.add_space(8.0);
+                        self.body_preview(ui, Some(body));
+                    }
+                }
                 DetailTab::Timing => key_values(
                     ui,
-                    &[
-                        ("Queueing", "4 ms".into()),
-                        ("Connection", "18 ms".into()),
-                        ("Waiting (TTFB)", "47 ms".into()),
-                        ("Download", "5 ms".into()),
-                        (
-                            "Total",
-                            event
-                                .duration_ms
-                                .map_or_else(|| "---".into(), |value| format!("{value} ms")),
-                        ),
-                    ],
+                    &[(
+                        "Total",
+                        event
+                            .duration_ms
+                            .map_or_else(|| "---".into(), |value| format!("{value} ms")),
+                    )],
                 ),
                 DetailTab::Connection => key_values(
                     ui,
                     &[
-                        ("Process", event.process.into()),
-                        ("PID", event.pid.to_string()),
-                        ("Local", event.local.into()),
-                        ("Remote", event.remote.into()),
+                        ("Process", event.process.clone()),
+                        (
+                            "PID",
+                            event
+                                .pid
+                                .map_or_else(|| "Unknown".into(), |pid| pid.to_string()),
+                        ),
+                        ("Local", event.local.clone()),
+                        ("Remote", event.remote.clone()),
                         (
                             "Transport",
                             if matches!(event.kind, EventKind::Udp | EventKind::Quic) {
@@ -528,11 +604,35 @@ impl AppWatch {
                 ),
             }
         });
+        if let Some(tab) = next_tab {
+            self.detail_tab = tab;
+        }
+    }
+
+    fn body_preview(&self, ui: &mut egui::Ui, body: Option<&[u8]>) {
+        let Some(body) = body else {
+            code_block(ui, "Unavailable or not captured");
+            return;
+        };
+        let preview = &body[..body.len().min(Self::MAX_BODY_PREVIEW_BYTES)];
+        code_block(ui, &String::from_utf8_lossy(preview));
+        if preview.len() < body.len() {
+            ui.label(
+                RichText::new(format!(
+                    "Preview limited to {} of {} for UI performance.",
+                    format_bytes(preview.len() as u64),
+                    format_bytes(body.len() as u64)
+                ))
+                .size(10.0)
+                .color(DIM),
+            );
+        }
     }
 }
 
 impl eframe::App for AppWatch {
     fn logic(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
+        self.receive_runtime_events(context);
         self.tick();
         if self.recording {
             context.request_repaint_after(std::time::Duration::from_secs(1));
@@ -556,12 +656,13 @@ impl eframe::App for AppWatch {
         egui::CentralPanel::default()
             .frame(Frame::new().fill(BG).inner_margin(Margin::symmetric(18, 8)))
             .show(ui, |ui| {
-                self.stats(ui);
+                let visible = self.visible_event_indices();
+                self.stats(ui, &visible);
                 ui.add_space(10.0);
                 Self::panel().show(ui, |ui| {
-                    self.filter_bar(ui);
+                    self.filter_bar(ui, visible.len());
                     ui.add_space(8.0);
-                    self.event_table(ui);
+                    self.event_table(ui, &visible);
                 });
                 ui.add_space(10.0);
                 self.details(ui);
@@ -576,6 +677,29 @@ impl eframe::App for AppWatch {
                         }
                     });
                 }
+                if let Some(error) = &self.capture_error {
+                    ui.add_space(8.0);
+                    ui.label(RichText::new(error).size(10.0).color(DANGER));
+                }
             });
     }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    if bytes >= MB as u64 {
+        format!("{:.1} MB", bytes as f64 / MB)
+    } else if bytes >= KB as u64 {
+        format!("{:.1} KB", bytes as f64 / KB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+fn header_rows(headers: &[apppw_core::HttpHeader]) -> Vec<(&str, String)> {
+    headers
+        .iter()
+        .map(|header| (header.name.as_str(), header.value.clone()))
+        .collect()
 }

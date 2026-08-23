@@ -4,12 +4,13 @@ use std::{
     mem::size_of,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     path::PathBuf,
+    process::Command,
 };
 
 use apppw_core::{NetworkConnection, NetworkProtocol, ProcessInfo};
 use windows::{
     Win32::{
-        Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER, NO_ERROR},
+        Foundation::{BOOL, CloseHandle, ERROR_INSUFFICIENT_BUFFER, HWND, LPARAM, NO_ERROR},
         NetworkManagement::IpHelper::{
             GetExtendedTcpTable, GetExtendedUdpTable, MIB_TCP6ROW_OWNER_PID,
             MIB_TCP6TABLE_OWNER_PID, MIB_TCPROW_OWNER_PID, MIB_TCPTABLE_OWNER_PID,
@@ -23,15 +24,23 @@ use windows::{
                 TH32CS_SNAPPROCESS,
             },
             Threading::{
-                OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+                OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+                QueryFullProcessImageNameW, SYNCHRONIZE, TerminateProcess, WaitForSingleObject,
             },
         },
+        UI::WindowsAndMessaging::{EnumWindows, GetWindowTextLengthW, GetWindowThreadProcessId, IsWindowVisible},
     },
     core::{PWSTR, Result},
 };
 
 pub struct ProcessCollector;
 pub struct SocketProcessResolver;
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct RelaunchSummary {
+    pub relaunched: usize,
+    pub failed: usize,
+}
 
 impl ProcessCollector {
     pub fn list_processes(&self) -> Result<Vec<ProcessInfo>> {
@@ -82,10 +91,66 @@ impl SocketProcessResolver {
     pub fn resolve_pid(&self, connection: &NetworkConnection) -> Option<u32> {
         match connection.protocol {
             NetworkProtocol::TCP => tcp_pid(connection),
-            NetworkProtocol::UDP => udp_pid(connection),
+            NetworkProtocol::UDP | NetworkProtocol::QUIC => udp_pid(connection),
             _ => None,
         }
     }
+}
+
+pub fn relaunch_through_proxy(pid: u32, proxy: &str) -> Result<(), String> {
+    if pid == std::process::id() {
+        return Err("AppWatch cannot relaunch itself".into());
+    }
+    let path = process_image_path(pid).ok_or_else(|| "executable path is unavailable".to_owned())?;
+    let process = unsafe { OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, false, pid) }
+        .map_err(|error| format!("could not open process: {error}"))?;
+    let termination = unsafe { TerminateProcess(process, 0) };
+    if termination.is_ok() {
+        unsafe { WaitForSingleObject(process, 5_000) };
+    }
+    let _ = unsafe { CloseHandle(process) };
+    termination.map_err(|error| format!("could not stop process: {error}"))?;
+
+    let mut command = Command::new(&path);
+    if let Some(directory) = path.parent() {
+        command.current_dir(directory);
+    }
+    command
+        .env("HTTP_PROXY", proxy)
+        .env("HTTPS_PROXY", proxy)
+        .env("http_proxy", proxy)
+        .env("https_proxy", proxy)
+        .spawn()
+        .map_err(|error| format!("could not start {}: {error}", path.display()))?;
+    Ok(())
+}
+
+pub fn relaunch_open_apps_through_proxy(proxy: &str) -> Result<RelaunchSummary, String> {
+    let mut pids = HashSet::new();
+    unsafe { EnumWindows(Some(collect_application_pid), LPARAM(&mut pids as *mut _ as isize)) }
+        .map_err(|error| format!("could not enumerate open applications: {error}"))?;
+    pids.remove(&std::process::id());
+
+    let mut summary = RelaunchSummary::default();
+    for pid in pids {
+        match relaunch_through_proxy(pid, proxy) {
+            Ok(()) => summary.relaunched += 1,
+            Err(_) => summary.failed += 1,
+        }
+    }
+    Ok(summary)
+}
+
+unsafe extern "system" fn collect_application_pid(window: HWND, data: LPARAM) -> BOOL {
+    if unsafe { IsWindowVisible(window).as_bool() && GetWindowTextLengthW(window) > 0 } {
+        let mut pid = 0;
+        unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
+        if pid != 0 {
+            let pids = unsafe { &mut *(data.0 as *mut HashSet<u32>) };
+            pids.insert(pid);
+        }
+    }
+    true.into()
 }
 
 fn tcp_pid(connection: &NetworkConnection) -> Option<u32> {
