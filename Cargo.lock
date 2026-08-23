@@ -98,7 +98,13 @@ dependencies = [
 name = "apppw-ui"
 version = "0.1.0"
 dependencies = [
+ "apppw-capture",
+ "apppw-core",
+ "apppw-proxy",
+ "apppw-storage",
+ "apppw-windows",
  "eframe",
+ "tokio",
 ]
 
 [[package]]
