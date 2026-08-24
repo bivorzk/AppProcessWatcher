@@ -48,6 +48,7 @@ pub struct AppState {
     pub session_seconds: u64,
     pub last_tick: std::time::Instant,
     pub toast: Option<String>,
+    pub toast_at: Option<std::time::Instant>,
     pub capture_error: Option<String>,
     pub confirm_relaunch_all: bool,
     pub confirm_trust_certificate: bool,
@@ -69,6 +70,7 @@ impl AppState {
             session_seconds: 0,
             last_tick: std::time::Instant::now(),
             toast: None,
+            toast_at: None,
             capture_error: None,
             confirm_relaunch_all: false,
             confirm_trust_certificate: false,
@@ -123,6 +125,15 @@ impl AppState {
         } else {
             self.last_tick = std::time::Instant::now();
         }
+        if self.toast_at.is_some_and(|t| t.elapsed().as_secs() >= 5) {
+            self.toast = None;
+            self.toast_at = None;
+        }
+    }
+
+    pub fn set_toast(&mut self, msg: impl Into<String>) {
+        self.toast = Some(msg.into());
+        self.toast_at = Some(std::time::Instant::now());
     }
 }
 

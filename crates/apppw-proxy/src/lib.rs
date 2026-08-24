@@ -204,7 +204,11 @@ impl ProxyRuntime {
         let target = authority.as_str().to_owned();
         let upgrade = hyper::upgrade::on(&mut request);
 
-        if let Some(ca) = &self.certificate_authority {
+        if let Some(ca) = self
+            .certificate_authority
+            .as_ref()
+            .filter(|_| !requires_tls_passthrough(&host))
+        {
             let acceptor = match ca.acceptor_for(&host) {
                 Ok(acceptor) => acceptor,
                 Err(error) => return error_response(error),
@@ -416,6 +420,12 @@ fn is_upgrade_request(request: &Request<Incoming>) -> bool {
             .any(|token| token.trim().eq_ignore_ascii_case("upgrade"))
 }
 
+fn requires_tls_passthrough(host: &str) -> bool {
+    // ponytail: Cloudflare blocks the re-originated TLS fingerprint; passthrough
+    // can be removed if the upstream connection can preserve the client's TLS.
+    host.eq_ignore_ascii_case("gateway.discord.gg")
+}
+
 fn error_response(error: BoxError) -> Response<Full<Bytes>> {
     text_response(StatusCode::BAD_GATEWAY, &format!("proxy error: {error}"))
 }
@@ -543,6 +553,13 @@ mod tests {
         assert_eq!(&echoed, b"ping");
         assert_eq!(events.recv().await.unwrap().request.status_code, Some(101));
         handle.shutdown().await.unwrap();
+    }
+
+    #[test]
+    fn discord_gateway_bypasses_tls_inspection() {
+        assert!(requires_tls_passthrough("gateway.discord.gg"));
+        assert!(requires_tls_passthrough("GATEWAY.DISCORD.GG"));
+        assert!(!requires_tls_passthrough("discord.com"));
     }
 
     #[test]

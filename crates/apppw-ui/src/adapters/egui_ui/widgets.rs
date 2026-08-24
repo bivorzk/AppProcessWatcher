@@ -3,7 +3,14 @@ use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, RichText, Stroke,
 use super::theme::*;
 
 pub(super) fn section_label(ui: &mut egui::Ui, text: &str) {
-    ui.label(RichText::new(text).font(bold_font(9.0)).color(DIM).strong());
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(text).font(bold_font(9.0)).color(DIM).strong());
+        let (rect, _) = ui.allocate_exact_size(egui::Vec2::new(ui.available_width(), 1.0), egui::Sense::hover());
+        ui.painter().line_segment(
+            [egui::pos2(rect.left(), rect.center().y), egui::pos2(rect.right(), rect.center().y)],
+            Stroke::new(1.0, LINE),
+        );
+    });
 }
 
 pub(super) fn process_button(
@@ -19,7 +26,7 @@ pub(super) fn process_button(
     } else {
         Color32::TRANSPARENT
     };
-    Frame::new()
+    let response = Frame::new()
         .fill(fill)
         .stroke(Stroke::new(
             1.0,
@@ -54,14 +61,30 @@ pub(super) fn process_button(
             });
         })
         .response
-        .interact(egui::Sense::click())
-        .clicked()
+        .interact(egui::Sense::click());
+    if response.hovered() && !selected {
+        ui.painter().rect_filled(
+            response.rect,
+            CornerRadius::same(5),
+            Color32::from_rgba_unmultiplied(101, 217, 255, 18),
+        );
+    }
+    response.clicked()
 }
 
 pub(super) fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     ui.add(
         egui::Button::new(RichText::new(text).font(bold_font(11.0)).color(BG).strong())
             .fill(ACCENT)
+            .stroke(Stroke::NONE)
+            .corner_radius(5),
+    )
+}
+
+pub(super) fn danger_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    ui.add(
+        egui::Button::new(RichText::new(text).font(bold_font(11.0)).color(BG).strong())
+            .fill(DANGER)
             .stroke(Stroke::NONE)
             .corner_radius(5),
     )

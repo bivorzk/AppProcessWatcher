@@ -96,7 +96,7 @@ impl AppWatch {
                 }
                 RuntimeEvent::Closed(id) => self.events.retain(|event| event.id != id),
                 RuntimeEvent::Processes(processes) => self.replace_processes(context, processes),
-                RuntimeEvent::Warning(warning) => self.toast = Some(warning),
+                RuntimeEvent::Warning(warning) => self.set_toast(warning),
                 RuntimeEvent::Error(error) => self.capture_error = Some(error),
             }
             if index + 1 == Self::MAX_RUNTIME_EVENTS_PER_FRAME {
@@ -187,21 +187,25 @@ impl AppWatch {
         });
         ui.add_space(24.0);
         section_label(ui, "PROGRAMMES");
-        ui.horizontal(|ui| {
-            ui.selectable_value(
-                &mut self.process_tab,
-                ProcessTab::Applications,
-                "Applications",
-            );
-            ui.selectable_value(&mut self.process_tab, ProcessTab::Processes, "Processes");
-        });
-        ui.add_space(6.0);
-
         let application_count = self
             .processes
             .iter()
             .filter(|process| process.application)
             .count();
+        let processes_count = self.processes.len();
+        ui.horizontal(|ui| {
+            ui.selectable_value(
+                &mut self.process_tab,
+                ProcessTab::Applications,
+                format!("Applications · {application_count}"),
+            );
+            ui.selectable_value(
+                &mut self.process_tab,
+                ProcessTab::Processes,
+                format!("Processes · {processes_count}"),
+            );
+        });
+        ui.add_space(6.0);
 
         let mut next_pid = None;
         egui::ScrollArea::vertical()
@@ -250,9 +254,14 @@ impl AppWatch {
 
         ui.with_layout(Layout::bottom_up(Align::LEFT), |ui| {
             ui.add_space(8.0);
+            let widget_stroke = if self.capture_error.is_none() {
+                Color32::from_rgb(30, 70, 110)
+            } else {
+                DANGER.gamma_multiply(0.55)
+            };
             Frame::new()
                 .fill(PANEL_ALT)
-                .stroke(Stroke::new(1.0, LINE))
+                .stroke(Stroke::new(1.0, widget_stroke))
                 .corner_radius(CornerRadius::same(6))
                 .inner_margin(Margin::same(10))
                 .show(ui, |ui| {
@@ -313,7 +322,7 @@ impl AppWatch {
                     ui.add_enabled_ui(self.selected_pid.is_some(), |ui| {
                         if ui.button("Relaunch selected app").clicked() {
                             self.runtime.relaunch_through_proxy(self.selected_pid);
-                            self.toast = Some("Relaunching the selected app through the proxy…".into());
+                            self.set_toast("Relaunching the selected app through the proxy…");
                             ui.close();
                         }
                     });
@@ -330,36 +339,51 @@ impl AppWatch {
                     );
                 });
                 if secondary_button(ui, "Export JSON").clicked() {
-                    self.toast = Some("Export becomes available when storage is connected.".into());
+                    self.set_toast("Export becomes available when storage is connected.");
                 }
                 if secondary_button(ui, "Clear").clicked() {
                     self.events.clear();
                     self.selected_event = None;
-                    self.toast = Some("Current screen data cleared.".into());
+                    self.set_toast("Current screen data cleared.");
                 }
                 let label = if self.recording {
                     "Stop recording"
                 } else {
                     "Start recording"
                 };
-                if primary_button(ui, label).clicked() {
+                let record_clicked = if self.recording {
+                    danger_button(ui, label).clicked()
+                } else {
+                    primary_button(ui, label).clicked()
+                };
+                if record_clicked {
                     self.recording = !self.recording;
-                    self.toast = Some(if self.recording {
-                        "Recording started.".into()
-                    } else {
-                        "Recording stopped.".into()
-                    });
+                    let msg = if self.recording { "Recording started." } else { "Recording stopped." };
+                    self.set_toast(msg);
                 }
-                ui.label(
-                    RichText::new(if self.recording {
-                        format!("●  {}", format_time(self.session_seconds))
-                    } else {
-                        "■  PAUSED".into()
-                    })
-                    .font(bold_font(11.0))
-                    .color(if self.recording { DANGER } else { DIM })
-                    .strong(),
-                );
+                let (timer_text, timer_color, pill_fill, pill_stroke) = if self.recording {
+                    (
+                        format!("●  {}", format_time(self.session_seconds)),
+                        DANGER,
+                        Color32::from_rgba_unmultiplied(255, 107, 138, 18),
+                        DANGER.gamma_multiply(0.45),
+                    )
+                } else {
+                    ("■  PAUSED".to_string(), DIM, Color32::TRANSPARENT, LINE)
+                };
+                Frame::new()
+                    .fill(pill_fill)
+                    .stroke(Stroke::new(1.0, pill_stroke))
+                    .corner_radius(CornerRadius::same(5))
+                    .inner_margin(Margin::symmetric(8, 5))
+                    .show(ui, |ui| {
+                        ui.label(
+                            RichText::new(timer_text)
+                                .font(bold_font(11.0))
+                                .color(timer_color)
+                                .strong(),
+                        );
+                    });
             });
         });
     }
@@ -400,7 +424,7 @@ impl AppWatch {
 
         ui.columns(cards.len(), |columns| {
             for (column, (label, value, colour)) in columns.iter_mut().zip(cards) {
-                Frame::new()
+                let card = Frame::new()
                     .fill(PANEL)
                     .stroke(Stroke::new(1.0, LINE))
                     .corner_radius(CornerRadius::same(6))
@@ -419,6 +443,12 @@ impl AppWatch {
                                 .strong(),
                         );
                     });
+                let rect = card.response.rect;
+                let stripe = egui::Rect::from_min_size(
+                    egui::pos2(rect.min.x + 1.0, rect.min.y + 1.0),
+                    egui::vec2(rect.width() - 2.0, 2.0),
+                );
+                column.painter().rect_filled(stripe, CornerRadius::same(0), colour);
             }
         });
     }
@@ -451,22 +481,45 @@ impl AppWatch {
             }
         });
         ui.add_space(4.0);
+        let filter_id = egui::Id::new("traffic_filter");
+        if ui.input_mut(|i| i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::CTRL, egui::Key::F))) {
+            ui.memory_mut(|m| m.request_focus(filter_id));
+        }
         ui.horizontal(|ui| {
-            ui.label(RichText::new("⌕").size(19.0).color(ACCENT));
+            ui.label(RichText::new("⎕").size(19.0).color(ACCENT));
+            let has_filter = !self.filter.is_empty();
+            let side_reserve = if has_filter { 130.0 } else { 96.0 };
             let response = ui.add_sized(
-                [ui.available_width() - 96.0, 30.0],
+                [(ui.available_width() - side_reserve).max(100.0), 30.0],
                 egui::TextEdit::singleline(&mut self.filter)
+                    .id(filter_id)
                     .hint_text("Filter: process:Discord.exe protocol:TCP port:443")
                     .text_color(TEXT),
             );
             if response.changed() {
                 self.filter_error = validate_filter(&self.filter).err();
             }
-            ui.label(
-                RichText::new(format!("{visible_count} shown"))
-                    .size(10.0)
-                    .color(DIM),
-            );
+            if response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.filter.clear();
+                self.filter_error = None;
+                self.selected_event = None;
+            }
+            if has_filter && ui.add(
+                egui::Button::new(RichText::new("✕").size(10.0).color(MUTED))
+                    .fill(PANEL_ALT)
+                    .stroke(Stroke::new(1.0, LINE))
+                    .corner_radius(4),
+            ).on_hover_text("Clear filter (Esc)").clicked() {
+                self.filter.clear();
+                self.filter_error = None;
+                self.selected_event = None;
+            }
+            let count_label = if has_filter {
+                format!("{visible_count} matched")
+            } else {
+                format!("{visible_count} events")
+            };
+            ui.label(RichText::new(count_label).size(10.0).color(DIM));
         });
         if let Some(error) = &self.filter_error {
             ui.label(RichText::new(error).size(10.0).color(DANGER));
@@ -505,6 +558,13 @@ impl AppWatch {
                 for row in rows {
                     let event = &self.events[visible[row]];
                     let selected = self.selected_event == Some(event.id);
+                    let event_id = event.id;
+                    let copy_host = event.host.clone();
+                    let copy_url = if event.path.is_empty() {
+                        event.host.clone()
+                    } else {
+                        format!("{}{}", event.host, event.path)
+                    };
                     let row_fill = if selected {
                         Color32::from_rgb(18, 41, 65)
                     } else {
@@ -580,22 +640,43 @@ impl AppWatch {
                         })
                         .response
                         .interact(egui::Sense::click());
-                    if response.clicked() {
-                        self.selected_event = Some(event.id);
+                    if response.hovered() && !selected {
+                        ui.painter().rect_filled(
+                            response.rect,
+                            CornerRadius::same(4),
+                            Color32::from_rgba_unmultiplied(101, 217, 255, 10),
+                        );
                     }
+                    if response.clicked() {
+                        self.selected_event = Some(event_id);
+                    }
+                    let _ = response.context_menu(|ui| {
+                        if ui.button("Copy host").clicked() {
+                            ui.ctx().copy_text(copy_host);
+                            ui.close();
+                        }
+                        if ui.button("Copy URL").clicked() {
+                            ui.ctx().copy_text(copy_url);
+                            ui.close();
+                        }
+                    });
                 }
             });
 
         if visible.is_empty() {
             ui.vertical_centered(|ui| {
                 ui.add_space(24.0);
-                ui.label(
-                    RichText::new("NO MATCHING TRAFFIC")
-                        .font(bold_font(12.0))
-                        .color(DIM)
-                        .strong(),
-                );
-                ui.label(RichText::new("Adjust the filter or select another process.").color(DIM));
+                let (heading, body) = if !self.recording && self.events.is_empty() {
+                    ("PAUSED", "Press Start recording to begin capturing traffic.")
+                } else if self.events.is_empty() {
+                    ("WAITING FOR TRAFFIC", "Network events will appear here automatically.")
+                } else if !self.filter.is_empty() {
+                    ("NO MATCHES", "Clear or adjust the filter to see more results.")
+                } else {
+                    ("NO TRAFFIC", "Select another process or switch the traffic view.")
+                };
+                ui.label(RichText::new(heading).font(bold_font(12.0)).color(DIM).strong());
+                ui.label(RichText::new(body).color(DIM));
                 ui.add_space(24.0);
             });
         }
@@ -799,7 +880,7 @@ impl AppWatch {
             });
         if confirmed {
             self.runtime.relaunch_through_proxy(None);
-            self.toast = Some("Relaunching open apps through the proxy…".into());
+            self.set_toast("Relaunching open apps through the proxy…");
             self.confirm_relaunch_all = false;
         } else if cancelled {
             self.confirm_relaunch_all = false;
@@ -835,7 +916,7 @@ impl AppWatch {
             });
         if confirmed {
             self.runtime.trust_https_certificate();
-            self.toast = Some("Installing the HTTPS certificate for the current user…".into());
+            self.set_toast("Installing the HTTPS certificate for the current user…");
             self.confirm_trust_certificate = false;
         } else if cancelled {
             self.confirm_trust_certificate = false;
@@ -887,6 +968,7 @@ impl eframe::App for AppWatch {
                         ui.label(RichText::new(message).size(10.0).color(MUTED));
                         if ui.small_button("Dismiss").clicked() {
                             self.toast = None;
+                            self.toast_at = None;
                         }
                     });
                 }
