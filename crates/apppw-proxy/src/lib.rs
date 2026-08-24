@@ -14,7 +14,7 @@ use http_body_util::{BodyExt, Full, Limited};
 use hyper::{
     Method, Request, Response, StatusCode, Uri,
     body::Incoming,
-    header::{HOST, HeaderMap},
+    header::{CONNECTION, HOST, HeaderMap, UPGRADE},
     server::conn::http1,
     service::service_fn,
 };
@@ -229,6 +229,7 @@ impl ProxyRuntime {
                 });
                 let _ = http1::Builder::new()
                     .serve_connection(TokioIo::new(tls), service)
+                    .with_upgrades()
                     .await;
             });
         } else {
@@ -249,13 +250,15 @@ impl ProxyRuntime {
 
     async fn forward(
         &self,
-        request: Request<Incoming>,
+        mut request: Request<Incoming>,
         forced_scheme: Option<&str>,
         default_host: Option<&str>,
         client_address: SocketAddr,
     ) -> Result<Response<Full<Bytes>>, BoxError> {
         let started_at = SystemTime::now();
         let timer = Instant::now();
+        let downstream_upgrade =
+            is_upgrade_request(&request).then(|| hyper::upgrade::on(&mut request));
         let (mut parts, body) = request.into_parts();
         let request_headers = headers(&parts.headers);
         let request_bytes = Limited::new(body, MAX_BODY_BYTES)
@@ -289,17 +292,26 @@ impl ProxyRuntime {
         parts.headers.remove("proxy-connection");
         let method = parts.method.to_string();
 
-        let response = self
+        let mut response = self
             .client
             .request(Request::from_parts(parts, Full::new(request_bytes.clone())))
             .await?;
+        let tunnel = if response.status() == StatusCode::SWITCHING_PROTOCOLS {
+            downstream_upgrade.map(|downstream| (downstream, hyper::upgrade::on(&mut response)))
+        } else {
+            None
+        };
         let (response_parts, response_body) = response.into_parts();
         let status = response_parts.status;
         let response_headers = headers(&response_parts.headers);
-        let response_bytes = Limited::new(response_body, MAX_BODY_BYTES)
-            .collect()
-            .await?
-            .to_bytes();
+        let response_bytes = if tunnel.is_some() {
+            Bytes::new()
+        } else {
+            Limited::new(response_body, MAX_BODY_BYTES)
+                .collect()
+                .await?
+                .to_bytes()
+        };
         let info = HttpRequestInfo {
             id: self.next_id.fetch_add(1, Ordering::Relaxed),
             connection_id: None,
@@ -322,6 +334,16 @@ impl ProxyRuntime {
             client_address,
             request: info,
         });
+        if let Some((downstream, upstream)) = tunnel {
+            tokio::spawn(async move {
+                let Ok((downstream, upstream)) = tokio::try_join!(downstream, upstream) else {
+                    return;
+                };
+                let mut downstream = TokioIo::new(downstream);
+                let mut upstream = TokioIo::new(upstream);
+                let _ = tokio::io::copy_bidirectional(&mut downstream, &mut upstream).await;
+            });
+        }
         Ok(Response::from_parts(
             response_parts,
             Full::new(response_bytes),
@@ -383,6 +405,17 @@ fn headers(headers: &HeaderMap) -> Vec<HttpHeader> {
         .collect()
 }
 
+fn is_upgrade_request(request: &Request<Incoming>) -> bool {
+    request.headers().contains_key(UPGRADE)
+        && request
+            .headers()
+            .get_all(CONNECTION)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .flat_map(|value| value.split(','))
+            .any(|token| token.trim().eq_ignore_ascii_case("upgrade"))
+}
+
 fn error_response(error: BoxError) -> Response<Full<Bytes>> {
     text_response(StatusCode::BAD_GATEWAY, &format!("proxy error: {error}"))
 }
@@ -442,6 +475,73 @@ mod tests {
                 .value,
             "[REDACTED]"
         );
+        handle.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn forwards_websocket_upgrade_and_tunnels_bytes() {
+        let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_address = upstream.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (stream, _) = upstream.accept().await.unwrap();
+            let service = service_fn(|mut request| async move {
+                let upgrade = hyper::upgrade::on(&mut request);
+                tokio::spawn(async move {
+                    let upgraded = upgrade.await.unwrap();
+                    let mut connection = TokioIo::new(upgraded);
+                    let mut message = [0; 4];
+                    tokio::io::AsyncReadExt::read_exact(&mut connection, &mut message)
+                        .await
+                        .unwrap();
+                    tokio::io::AsyncWriteExt::write_all(&mut connection, &message)
+                        .await
+                        .unwrap();
+                });
+                Ok::<_, Infallible>(
+                    Response::builder()
+                        .status(StatusCode::SWITCHING_PROTOCOLS)
+                        .header(CONNECTION, "Upgrade")
+                        .header(UPGRADE, "websocket")
+                        .body(Full::new(Bytes::new()))
+                        .unwrap(),
+                )
+            });
+            http1::Builder::new()
+                .serve_connection(TokioIo::new(stream), service)
+                .with_upgrades()
+                .await
+                .unwrap();
+        });
+
+        let (event_sender, mut events) = mpsc::unbounded_channel();
+        let proxy = HttpProxy::new("127.0.0.1:0".parse().unwrap(), event_sender);
+        let handle = proxy.start().await.unwrap();
+        let mut client = TcpStream::connect(handle.local_address).await.unwrap();
+        let request = format!(
+            "GET http://{upstream_address}/socket HTTP/1.1\r\nHost: {upstream_address}\r\nConnection: keep-alive, Upgrade\r\nUpgrade: websocket\r\n\r\n"
+        );
+        tokio::io::AsyncWriteExt::write_all(&mut client, request.as_bytes())
+            .await
+            .unwrap();
+        let mut response = Vec::new();
+        while !response.ends_with(b"\r\n\r\n") {
+            let mut byte = [0];
+            tokio::io::AsyncReadExt::read_exact(&mut client, &mut byte)
+                .await
+                .unwrap();
+            response.push(byte[0]);
+        }
+
+        assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 101"));
+        tokio::io::AsyncWriteExt::write_all(&mut client, b"ping")
+            .await
+            .unwrap();
+        let mut echoed = [0; 4];
+        tokio::io::AsyncReadExt::read_exact(&mut client, &mut echoed)
+            .await
+            .unwrap();
+        assert_eq!(&echoed, b"ping");
+        assert_eq!(events.recv().await.unwrap().request.status_code, Some(101));
         handle.shutdown().await.unwrap();
     }
 
