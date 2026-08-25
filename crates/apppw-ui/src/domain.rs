@@ -52,12 +52,14 @@ pub struct NetworkEvent {
     pub response_headers: Vec<HttpHeader>,
     pub request_body: Option<Vec<u8>>,
     pub response_body: Option<Vec<u8>>,
+    pub ja4: Option<String>,
+    pub ja4_outlier: bool,
 }
 
 impl NetworkEvent {
     pub fn search_text(&self) -> String {
         format!(
-            "{} {} {} {} {} {} {} {}",
+            "{} {} {} {} {} {} {} {} {}",
             self.process,
             self.method,
             self.host,
@@ -66,7 +68,8 @@ impl NetworkEvent {
                 .map_or_else(|| "---".into(), |value| value.to_string()),
             self.kind.label(),
             self.local,
-            self.remote
+            self.remote,
+            self.ja4.as_deref().unwrap_or_default(),
         )
         .to_lowercase()
     }

@@ -83,8 +83,9 @@ impl AppWatch {
                 break;
             };
             match event {
-                RuntimeEvent::Connection(event) => {
+                RuntimeEvent::Connection(mut event) => {
                     if self.recording {
+                        self.classify_ja4(&mut event);
                         if let Some(existing) =
                             self.events.iter_mut().find(|item| item.id == event.id)
                         {
@@ -448,7 +449,9 @@ impl AppWatch {
                     egui::pos2(rect.min.x + 1.0, rect.min.y + 1.0),
                     egui::vec2(rect.width() - 2.0, 2.0),
                 );
-                column.painter().rect_filled(stripe, CornerRadius::same(0), colour);
+                column
+                    .painter()
+                    .rect_filled(stripe, CornerRadius::same(0), colour);
             }
         });
     }
@@ -480,9 +483,41 @@ impl AppWatch {
                 }
             }
         });
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("FINGERPRINTS")
+                    .font(bold_font(9.0))
+                    .color(DIM)
+                    .strong(),
+            );
+            for (show, label) in [(true, "SHOW ALL"), (false, "HIDE DIFFERENCES")] {
+                if ui
+                    .selectable_label(
+                        self.show_ja4_differences == show,
+                        RichText::new(label).font(bold_font(10.0)).color(
+                            if self.show_ja4_differences == show { ACCENT } else { MUTED },
+                        ),
+                    )
+                    .on_hover_text(if show {
+                        "Show normal traffic and requests whose JA4 differs from the process baseline"
+                    } else {
+                        "Hide requests whose JA4 differs from the first fingerprint seen for that process"
+                    })
+                    .clicked()
+                {
+                    self.show_ja4_differences = show;
+                    self.selected_event = None;
+                }
+            }
+        });
         ui.add_space(4.0);
         let filter_id = egui::Id::new("traffic_filter");
-        if ui.input_mut(|i| i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::CTRL, egui::Key::F))) {
+        if ui.input_mut(|i| {
+            i.consume_shortcut(&egui::KeyboardShortcut::new(
+                egui::Modifiers::CTRL,
+                egui::Key::F,
+            ))
+        }) {
             ui.memory_mut(|m| m.request_focus(filter_id));
         }
         ui.horizontal(|ui| {
@@ -504,12 +539,17 @@ impl AppWatch {
                 self.filter_error = None;
                 self.selected_event = None;
             }
-            if has_filter && ui.add(
-                egui::Button::new(RichText::new("✕").size(10.0).color(MUTED))
-                    .fill(PANEL_ALT)
-                    .stroke(Stroke::new(1.0, LINE))
-                    .corner_radius(4),
-            ).on_hover_text("Clear filter (Esc)").clicked() {
+            if has_filter
+                && ui
+                    .add(
+                        egui::Button::new(RichText::new("✕").size(10.0).color(MUTED))
+                            .fill(PANEL_ALT)
+                            .stroke(Stroke::new(1.0, LINE))
+                            .corner_radius(4),
+                    )
+                    .on_hover_text("Clear filter (Esc)")
+                    .clicked()
+            {
                 self.filter.clear();
                 self.filter_error = None;
                 self.selected_event = None;
@@ -567,6 +607,8 @@ impl AppWatch {
                     };
                     let row_fill = if selected {
                         Color32::from_rgb(18, 41, 65)
+                    } else if event.ja4_outlier {
+                        Color32::from_rgba_unmultiplied(255, 207, 112, 18)
                     } else {
                         Color32::TRANSPARENT
                     };
@@ -576,6 +618,8 @@ impl AppWatch {
                             1.0,
                             if selected {
                                 ACCENT
+                            } else if event.ja4_outlier {
+                                WARNING
                             } else {
                                 Color32::TRANSPARENT
                             },
@@ -647,6 +691,11 @@ impl AppWatch {
                             Color32::from_rgba_unmultiplied(101, 217, 255, 10),
                         );
                     }
+                    if event.ja4_outlier {
+                        response.clone().on_hover_text(
+                            "JA4 differs from the first TLS fingerprint seen for this process. This is a clue, not proof of a modified client.",
+                        );
+                    }
                     if response.clicked() {
                         self.selected_event = Some(event_id);
                     }
@@ -667,15 +716,37 @@ impl AppWatch {
             ui.vertical_centered(|ui| {
                 ui.add_space(24.0);
                 let (heading, body) = if !self.recording && self.events.is_empty() {
-                    ("PAUSED", "Press Start recording to begin capturing traffic.")
+                    (
+                        "PAUSED",
+                        "Press Start recording to begin capturing traffic.",
+                    )
                 } else if self.events.is_empty() {
-                    ("WAITING FOR TRAFFIC", "Network events will appear here automatically.")
+                    (
+                        "WAITING FOR TRAFFIC",
+                        "Network events will appear here automatically.",
+                    )
                 } else if !self.filter.is_empty() {
-                    ("NO MATCHES", "Clear or adjust the filter to see more results.")
+                    (
+                        "NO MATCHES",
+                        "Clear or adjust the filter to see more results.",
+                    )
+                } else if !self.show_ja4_differences {
+                    (
+                        "DIFFERENCES HIDDEN",
+                        "Switch fingerprints to Show all to include JA4 differences.",
+                    )
                 } else {
-                    ("NO TRAFFIC", "Select another process or switch the traffic view.")
+                    (
+                        "NO TRAFFIC",
+                        "Select another process or switch the traffic view.",
+                    )
                 };
-                ui.label(RichText::new(heading).font(bold_font(12.0)).color(DIM).strong());
+                ui.label(
+                    RichText::new(heading)
+                        .font(bold_font(12.0))
+                        .color(DIM)
+                        .strong(),
+                );
                 ui.label(RichText::new(body).color(DIM));
                 ui.add_space(24.0);
             });
@@ -722,6 +793,9 @@ impl AppWatch {
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     badge(ui, event.kind.label(), event.kind.colour());
+                    if event.ja4_outlier {
+                        badge(ui, "JA4 DIFFERENCE", WARNING);
+                    }
                     ui.label(
                         RichText::new(format!("#{}", event.id))
                             .size(10.0)
@@ -819,6 +893,23 @@ impl AppWatch {
                             },
                         ),
                         ("Captured using", "WinDivert".into()),
+                        (
+                            "JA4",
+                            event
+                                .ja4
+                                .clone()
+                                .unwrap_or_else(|| "Unavailable (non-TLS or passthrough)".into()),
+                        ),
+                        (
+                            "Fingerprint status",
+                            if event.ja4_outlier {
+                                "Differs from this process's session baseline".into()
+                            } else if event.ja4.is_some() {
+                                "Matches session baseline".into()
+                            } else {
+                                "Not available".into()
+                            },
+                        ),
                     ],
                 ),
             }

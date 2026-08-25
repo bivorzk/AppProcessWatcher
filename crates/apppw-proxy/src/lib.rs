@@ -1,10 +1,12 @@
 use std::{
     convert::Infallible,
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    pin::Pin,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
+    task::{Context, Poll},
     time::{Instant, SystemTime},
 };
 
@@ -32,11 +34,12 @@ use rustls::{
     pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer},
 };
 use tokio::{
+    io::{AsyncRead, AsyncWrite, ReadBuf},
     net::{TcpListener, TcpStream},
     sync::{mpsc, oneshot},
     task::JoinHandle,
 };
-use tokio_rustls::TlsAcceptor;
+use tokio_rustls::LazyConfigAcceptor;
 
 pub const DEFAULT_PROXY_ADDRESS: SocketAddr =
     SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8877);
@@ -187,7 +190,7 @@ impl ProxyRuntime {
         if request.method() == Method::CONNECT {
             return self.handle_connect(request, client_address).await;
         }
-        self.forward(request, None, None, client_address)
+        self.forward(request, None, None, client_address, None)
             .await
             .unwrap_or_else(error_response)
     }
@@ -209,23 +212,31 @@ impl ProxyRuntime {
             .as_ref()
             .filter(|_| !requires_tls_passthrough(&host))
         {
-            let acceptor = match ca.acceptor_for(&host) {
-                Ok(acceptor) => acceptor,
+            let config = match ca.config_for(&host) {
+                Ok(config) => config,
                 Err(error) => return error_response(error),
             };
             tokio::spawn(async move {
                 let Ok(upgraded) = upgrade.await else { return };
-                let Ok(tls) = acceptor.accept(TokioIo::new(upgraded)).await else {
+                let recorder = RecordingIo::new(TokioIo::new(upgraded));
+                let Ok(start) =
+                    LazyConfigAcceptor::new(rustls::server::Acceptor::default(), recorder).await
+                else {
+                    return;
+                };
+                let ja4 = ja4::parse_ja4(&start.io.captured, false).map(|value| value.to_string());
+                let Ok(tls) = start.into_stream(config).await else {
                     return;
                 };
                 let runtime = self.clone();
                 let service = service_fn(move |request| {
                     let runtime = runtime.clone();
                     let host = target.clone();
+                    let ja4 = ja4.clone();
                     async move {
                         Ok::<_, Infallible>(
                             runtime
-                                .forward(request, Some("https"), Some(&host), client_address)
+                                .forward(request, Some("https"), Some(&host), client_address, ja4)
                                 .await
                                 .unwrap_or_else(error_response),
                         )
@@ -258,6 +269,7 @@ impl ProxyRuntime {
         forced_scheme: Option<&str>,
         default_host: Option<&str>,
         client_address: SocketAddr,
+        ja4: Option<String>,
     ) -> Result<Response<Full<Bytes>>, BoxError> {
         let started_at = SystemTime::now();
         let timer = Instant::now();
@@ -333,6 +345,7 @@ impl ProxyRuntime {
             response_body_size: Some(response_bytes.len()),
             started_at,
             duration_ms: Some(timer.elapsed().as_millis()),
+            ja4,
         };
         let _ = self.event_sender.send(ProxyEvent {
             client_address,
@@ -375,7 +388,7 @@ impl LocalCertificateAuthority {
         })
     }
 
-    fn acceptor_for(&self, host: &str) -> Result<TlsAcceptor, BoxError> {
+    fn config_for(&self, host: &str) -> Result<Arc<ServerConfig>, BoxError> {
         let mut params = CertificateParams::new(vec![host.to_owned()])?;
         params.distinguished_name.push(DnType::CommonName, host);
         params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
@@ -386,7 +399,61 @@ impl LocalCertificateAuthority {
         let config = ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(vec![certificate.der().clone()], private_key)?;
-        Ok(TlsAcceptor::from(Arc::new(config)))
+        Ok(Arc::new(config))
+    }
+}
+
+struct RecordingIo<T> {
+    inner: T,
+    captured: Vec<u8>,
+}
+
+impl<T> RecordingIo<T> {
+    fn new(inner: T) -> Self {
+        Self {
+            inner,
+            captured: Vec::new(),
+        }
+    }
+}
+
+impl<T: AsyncRead + Unpin> AsyncRead for RecordingIo<T> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let before = buffer.filled().len();
+        let result = Pin::new(&mut self.inner).poll_read(context, buffer);
+        if matches!(result, Poll::Ready(Ok(()))) {
+            let captured = buffer.filled()[before..].to_vec();
+            self.captured.extend_from_slice(&captured);
+        }
+        result
+    }
+}
+
+impl<T: AsyncWrite + Unpin> AsyncWrite for RecordingIo<T> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(context, buffer)
+    }
+
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(context)
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(context)
     }
 }
 
@@ -587,14 +654,28 @@ mod tests {
                 .with_root_certificates(roots)
                 .with_no_client_auth(),
         ));
-        let acceptor = authority.acceptor_for("example.test").unwrap();
+        let config = authority.config_for("example.test").unwrap();
         let (client, server) = tokio::io::duplex(4096);
+        let server = async move {
+            let start = LazyConfigAcceptor::new(
+                rustls::server::Acceptor::default(),
+                RecordingIo::new(server),
+            )
+            .await
+            .unwrap();
+            let fingerprint =
+                ja4::parse_ja4(&start.io.captured, false).map(|value| value.to_string());
+            start.into_stream(config).await.unwrap();
+            fingerprint
+        };
         let (client_result, server_result) = tokio::join!(
             connector.connect(ServerName::try_from("example.test").unwrap(), client),
-            acceptor.accept(server),
+            server,
         );
 
         client_result.unwrap();
-        server_result.unwrap();
+        let fingerprint = server_result.unwrap();
+        assert_eq!(fingerprint.len(), 36);
+        assert!(fingerprint.starts_with('t'));
     }
 }

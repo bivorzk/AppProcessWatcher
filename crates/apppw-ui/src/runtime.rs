@@ -428,6 +428,8 @@ fn to_ui_connection(connection: &NetworkConnection, packet_count: u64) -> Networ
         response_headers: Vec::new(),
         request_body: None,
         response_body: None,
+        ja4: None,
+        ja4_outlier: false,
     }
 }
 
@@ -456,6 +458,8 @@ fn to_ui_http(request: &HttpRequestInfo, local: SocketAddr, remote: SocketAddr) 
         response_headers: request.response_headers.clone(),
         request_body: request.request_body.clone(),
         response_body: request.response_body.clone(),
+        ja4: request.ja4.clone(),
+        ja4_outlier: false,
     }
 }
 
@@ -706,6 +710,7 @@ mod tests {
             response_body_size: Some(0),
             started_at: SystemTime::now(),
             duration_ms: Some(12),
+            ja4: Some("t13d1516h2_example_example".into()),
         };
         let event = to_ui_http(
             &request,

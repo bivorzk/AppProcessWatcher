@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::domain::{EventKind, NetworkEvent, Process};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -44,6 +46,7 @@ pub struct AppState {
     pub filter: String,
     pub filter_error: Option<String>,
     pub https_only: bool,
+    pub show_ja4_differences: bool,
     pub recording: bool,
     pub session_seconds: u64,
     pub last_tick: std::time::Instant,
@@ -53,6 +56,7 @@ pub struct AppState {
     pub confirm_relaunch_all: bool,
     pub confirm_trust_certificate: bool,
     pub process_tab: ProcessTab,
+    ja4_baselines: HashMap<String, String>,
 }
 
 impl AppState {
@@ -66,6 +70,7 @@ impl AppState {
             filter: String::new(),
             filter_error: None,
             https_only: false,
+            show_ja4_differences: true,
             recording: true,
             session_seconds: 0,
             last_tick: std::time::Instant::now(),
@@ -75,6 +80,7 @@ impl AppState {
             confirm_relaunch_all: false,
             confirm_trust_certificate: false,
             process_tab: ProcessTab::Applications,
+            ja4_baselines: HashMap::new(),
         }
     }
 
@@ -88,6 +94,7 @@ impl AppState {
             .enumerate()
             .filter(|(_, event)| self.event_matches_selected_process(event))
             .filter(|(_, event)| !self.https_only || event.kind == EventKind::Https)
+            .filter(|(_, event)| self.show_ja4_differences || !event.ja4_outlier)
             .filter(|(_, event)| matches_filter(event, &self.filter))
             .map(|(index, _)| index)
             .collect()
@@ -113,6 +120,20 @@ impl AppState {
                 || "All processes".into(),
                 |process| format!("{} · PID {}", process.name, process.pid),
             )
+    }
+
+    pub fn classify_ja4(&mut self, event: &mut NetworkEvent) {
+        let Some(ja4) = event.ja4.as_ref() else {
+            return;
+        };
+        if event.process.eq_ignore_ascii_case("Unknown process") {
+            return;
+        }
+        let baseline = self
+            .ja4_baselines
+            .entry(event.process.to_lowercase())
+            .or_insert_with(|| ja4.clone());
+        event.ja4_outlier = baseline != ja4;
     }
 
     pub fn tick(&mut self) {
@@ -145,10 +166,10 @@ pub fn validate_filter(filter: &str) -> Result<(), String> {
         let (key, value) = token.split_once(':').unwrap_or_default();
         if !matches!(
             key.to_lowercase().as_str(),
-            "process" | "host" | "method" | "status" | "protocol" | "ip" | "port"
+            "process" | "host" | "method" | "status" | "protocol" | "ip" | "port" | "ja4"
         ) {
             return Err(format!(
-                "Unknown filter ‘{key}’. Try host:, method:, protocol: or port:."
+                "Unknown filter ‘{key}’. Try host:, method:, protocol:, port: or ja4:."
             ));
         }
         if matches!(key.to_lowercase().as_str(), "status" | "port") && value.parse::<u16>().is_err()
@@ -182,6 +203,7 @@ fn matches_filter(event: &NetworkEvent, filter: &str) -> bool {
                 event.local.ends_with(&format!(":{value}"))
                     || event.remote.ends_with(&format!(":{value}"))
             }
+            "ja4" => event.ja4.as_ref().is_some_and(|ja4| ja4.contains(value)),
             _ => false,
         }
     })
@@ -213,6 +235,8 @@ mod tests {
             response_headers: Vec::new(),
             request_body: None,
             response_body: None,
+            ja4: Some("baseline".into()),
+            ja4_outlier: false,
         };
 
         assert!(matches_filter(
@@ -259,6 +283,8 @@ mod tests {
             response_headers: Vec::new(),
             request_body: None,
             response_body: None,
+            ja4: None,
+            ja4_outlier: false,
         };
         let mut state = AppState::new(vec![process], vec![event]);
         state.selected_pid = Some(42);
@@ -266,5 +292,42 @@ mod tests {
         assert_eq!(state.visible_event_indices(), vec![0]);
         state.process_tab = ProcessTab::Processes;
         assert!(state.visible_event_indices().is_empty());
+    }
+
+    #[test]
+    fn ja4_differences_can_be_hidden_without_claiming_a_client_identity() {
+        let mut baseline = NetworkEvent {
+            id: 1,
+            pid: Some(42),
+            process: "Discord.exe".into(),
+            method: "GET".into(),
+            host: "discord.com".into(),
+            path: "/api".into(),
+            status: Some(200),
+            kind: EventKind::Https,
+            bytes_sent: 0,
+            bytes_received: 0,
+            packet_count: 0,
+            duration_ms: Some(1),
+            local: "127.0.0.1:50000".into(),
+            remote: "127.0.0.1:8877".into(),
+            request_headers: Vec::new(),
+            response_headers: Vec::new(),
+            request_body: None,
+            response_body: None,
+            ja4: Some("fingerprint-a".into()),
+            ja4_outlier: false,
+        };
+        let mut different = baseline.clone();
+        different.id = 2;
+        different.ja4 = Some("fingerprint-b".into());
+        let mut state = AppState::new(Vec::new(), Vec::new());
+        state.classify_ja4(&mut baseline);
+        state.classify_ja4(&mut different);
+        assert!(!baseline.ja4_outlier);
+        assert!(different.ja4_outlier);
+        state.events = vec![baseline, different];
+        state.show_ja4_differences = false;
+        assert_eq!(state.visible_event_indices(), vec![0]);
     }
 }

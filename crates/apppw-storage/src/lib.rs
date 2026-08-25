@@ -88,8 +88,8 @@ impl Database {
     pub fn save_http_request(&self, request: &HttpRequestInfo) -> Result<()> {
         self.connection.execute(
             "INSERT INTO http_requests (
-                id, connection_id, method, scheme, host, path, status, started_at, duration_ms
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                id, connection_id, method, scheme, host, path, status, started_at, duration_ms, ja4
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(id) DO UPDATE SET
                 connection_id = excluded.connection_id,
                 method = excluded.method,
@@ -97,7 +97,8 @@ impl Database {
                 host = excluded.host,
                 path = excluded.path,
                 status = excluded.status,
-                duration_ms = excluded.duration_ms",
+                duration_ms = excluded.duration_ms,
+                ja4 = excluded.ja4",
             params![
                 sqlite_integer(request.id)?,
                 request.connection_id.map(sqlite_integer).transpose()?,
@@ -108,6 +109,7 @@ impl Database {
                 request.status_code,
                 unix_milliseconds(request.started_at)?,
                 request.duration_ms.map(sqlite_integer_u128).transpose()?,
+                request.ja4,
             ],
         )?;
         Ok(())
@@ -145,9 +147,20 @@ impl Database {
                 path TEXT NOT NULL,
                 status INTEGER,
                 started_at INTEGER NOT NULL,
-                duration_ms INTEGER
+                duration_ms INTEGER,
+                ja4 TEXT
              );",
-        )
+        )?;
+        let has_ja4: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('http_requests') WHERE name = 'ja4')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_ja4 {
+            self.connection
+                .execute("ALTER TABLE http_requests ADD COLUMN ja4 TEXT", [])?;
+        }
+        Ok(())
     }
 }
 
@@ -207,6 +220,7 @@ mod tests {
             response_body_size: Some(0),
             started_at: SystemTime::now(),
             duration_ms: Some(12),
+            ja4: Some("t13d1516h2_example_example".into()),
         };
 
         database.save_process(&process).unwrap();
@@ -223,5 +237,24 @@ mod tests {
                 .unwrap();
             assert_eq!(count, 1);
         }
+    }
+
+    #[test]
+    fn adds_ja4_to_an_existing_database() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute("CREATE TABLE http_requests (id INTEGER PRIMARY KEY)", [])
+            .unwrap();
+        let database = Database { connection };
+        database.initialise().unwrap();
+        let has_ja4: bool = database
+            .connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('http_requests') WHERE name = 'ja4')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(has_ja4);
     }
 }

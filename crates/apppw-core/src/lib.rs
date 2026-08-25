@@ -123,6 +123,7 @@ pub struct HttpRequestInfo {
     pub response_body_size: Option<usize>,
     pub started_at: SystemTime,
     pub duration_ms: Option<u128>,
+    pub ja4: Option<String>,
 }
 
 impl HttpRequestInfo {
@@ -353,6 +354,7 @@ mod tests {
             response_body_size: None,
             started_at,
             duration_ms: None,
+            ja4: None,
         }
     }
 }
