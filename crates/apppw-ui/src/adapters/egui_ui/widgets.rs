@@ -5,9 +5,15 @@ use super::theme::*;
 pub(super) fn section_label(ui: &mut egui::Ui, text: &str) {
     ui.horizontal(|ui| {
         ui.label(RichText::new(text).font(bold_font(9.0)).color(DIM).strong());
-        let (rect, _) = ui.allocate_exact_size(egui::Vec2::new(ui.available_width(), 1.0), egui::Sense::hover());
+        let (rect, _) = ui.allocate_exact_size(
+            egui::Vec2::new(ui.available_width(), 1.0),
+            egui::Sense::hover(),
+        );
         ui.painter().line_segment(
-            [egui::pos2(rect.left(), rect.center().y), egui::pos2(rect.right(), rect.center().y)],
+            [
+                egui::pos2(rect.left(), rect.center().y),
+                egui::pos2(rect.right(), rect.center().y),
+            ],
             Stroke::new(1.0, LINE),
         );
     });
