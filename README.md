@@ -13,8 +13,11 @@ The interface is still in development.
 - View live upload and download statistics
 - Observe TCP, UDP and QUIC traffic
 - Inspect active connections and HTTP requests
+- Forward WebSocket upgrade connections through the proxy
 - Inspect HTTPS through a local man-in-the-middle (MITM) proxy
 - Use a persistent local certificate authority (CA)
+- Calculate and store JA4 TLS fingerprints, and flag fingerprints that differ
+   from a process's baseline
 - Detect Chromium, Electron, CEF, Qt WebEngine and WebView2 applications
 - Store local traffic history in SQLite
 
@@ -59,6 +62,10 @@ Target application
 HTTPS inspection works only for applications using the AppWatch proxy.
 HTTP/3 and QUIC payloads cannot currently be decrypted. Binary or encoded
 responses are hidden by default but can be revealed from the response panel.
+WebSocket upgrade connections are forwarded by the proxy, but their tunneled
+payloads are not decoded as HTTP messages.
+The Discord gateway at `gateway.discord.gg` bypasses TLS interception because
+Discord rejects the proxy's re-originated TLS fingerprint.
 
 ## Chromium-based Applications
 
@@ -96,6 +103,11 @@ generated certificates and cannot be inspected through this proxy.
 - Windows only
 - HTTP/3 and QUIC payloads cannot currently be decrypted
 - HTTPS inspection requires the target application to use the AppWatch proxy
+- JA4 fingerprints are available only for TLS connections that reach the
+   inspecting proxy
+- WebSocket payloads are tunneled but are not decoded or displayed as HTTP
+   request and response bodies
+- `gateway.discord.gg` bypasses TLS inspection and is not decrypted
 - Applications using certificate pinning may reject intercepted HTTPS traffic
 - Some applications may ignore proxy configuration
 - Protocols other than HTTP(S) can be observed at the network level, but their
