@@ -59,6 +59,18 @@ Target application
 4. Relaunch the target application through the proxy at
    `http://127.0.0.1:8877`.
 
+### Command Line
+
+Applications can also be launched through the proxy from the command line:
+
+```powershell
+apppw-ui launch "C:\Path\To\app.exe" [args...]  # launch an executable through the proxy
+apppw-ui relaunch <pid>                          # restart a running process through the proxy
+```
+
+The AppWatch GUI must be running for the proxy to be online; the CLI only
+configures and starts the target application.
+
 HTTPS inspection works only for applications using the AppWatch proxy.
 HTTP/3 and QUIC payloads cannot currently be decrypted. Binary or encoded
 responses are hidden by default but can be revealed from the response panel.

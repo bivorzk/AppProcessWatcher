@@ -4,7 +4,7 @@ use super::theme::*;
 
 pub(super) fn section_label(ui: &mut egui::Ui, text: &str) {
     ui.horizontal(|ui| {
-        ui.label(RichText::new(text).font(bold_font(9.0)).color(DIM).strong());
+        ui.label(RichText::new(text).font(bold_font(9.5)).color(DIM).strong());
         let (rect, _) = ui.allocate_exact_size(
             egui::Vec2::new(ui.available_width(), 1.0),
             egui::Sense::hover(),
@@ -28,7 +28,7 @@ pub(super) fn process_button(
     detail: &str,
 ) -> bool {
     let fill = if selected {
-        Color32::from_rgb(18, 48, 70)
+        Color32::from_rgb(16, 43, 65)
     } else {
         Color32::TRANSPARENT
     };
@@ -42,8 +42,8 @@ pub(super) fn process_button(
                 Color32::TRANSPARENT
             },
         ))
-        .corner_radius(CornerRadius::same(5))
-        .inner_margin(Margin::symmetric(9, 7))
+        .corner_radius(CornerRadius::same(4))
+        .inner_margin(Margin::symmetric(10, 8))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.horizontal(|ui| {
@@ -51,15 +51,15 @@ pub(super) fn process_button(
                     ui.add(egui::Image::new(icon).fit_to_exact_size(egui::vec2(24.0, 24.0)));
                 }
                 ui.label(
-                    RichText::new("●")
-                        .size(9.0)
+                    RichText::new("•")
+                        .size(13.0)
                         .color(if active { SUCCESS } else { DIM }),
                 );
                 ui.vertical(|ui| {
                     ui.label(
                         RichText::new(name)
                             .font(bold_font(12.0))
-                            .color(if selected { TEXT } else { MUTED })
+                            .color(if selected { TEXT } else { ACCENT_2 })
                             .strong(),
                     );
                     ui.label(RichText::new(detail).size(9.0).color(DIM));
@@ -71,15 +71,24 @@ pub(super) fn process_button(
     if response.hovered() && !selected {
         ui.painter().rect_filled(
             response.rect,
-            CornerRadius::same(5),
-            Color32::from_rgba_unmultiplied(101, 217, 255, 18),
+            CornerRadius::same(4),
+            Color32::from_rgba_unmultiplied(101, 217, 255, 14),
         );
+    }
+    if selected {
+        let rail = egui::Rect::from_min_max(
+            response.rect.min,
+            egui::pos2(response.rect.min.x + 3.0, response.rect.max.y),
+        );
+        ui.painter()
+            .rect_filled(rail, CornerRadius::same(2), ACCENT);
     }
     response.clicked()
 }
 
 pub(super) fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    ui.add(
+    ui.add_sized(
+        [80.0, 30.0],
         egui::Button::new(RichText::new(text).font(bold_font(11.0)).color(BG).strong())
             .fill(ACCENT)
             .stroke(Stroke::NONE)
@@ -88,7 +97,8 @@ pub(super) fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
 }
 
 pub(super) fn danger_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    ui.add(
+    ui.add_sized(
+        [80.0, 30.0],
         egui::Button::new(RichText::new(text).font(bold_font(11.0)).color(BG).strong())
             .fill(DANGER)
             .stroke(Stroke::NONE)
@@ -99,8 +109,8 @@ pub(super) fn danger_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
 pub(super) fn secondary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     ui.add(
         egui::Button::new(RichText::new(text).color(MUTED))
-            .fill(PANEL)
-            .stroke(Stroke::new(1.0, LINE))
+            .fill(SURFACE)
+            .stroke(Stroke::new(1.0, LINE_SOFT))
             .corner_radius(5),
     )
 }

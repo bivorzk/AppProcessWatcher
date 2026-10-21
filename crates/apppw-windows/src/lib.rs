@@ -133,14 +133,24 @@ pub fn relaunch_through_proxy(pid: u32, proxy: &str) -> Result<(), String> {
     let _ = unsafe { CloseHandle(process) };
     termination.map_err(|error| format!("could not stop process: {error}"))?;
 
-    let mut command = Command::new(&path);
-    if let Some(directory) = path.parent() {
+    launch_through_proxy(&path, &[], proxy)?;
+    Ok(())
+}
+
+pub fn launch_through_proxy(
+    executable: &std::path::Path,
+    arguments: &[String],
+    proxy: &str,
+) -> Result<u32, String> {
+    let mut command = Command::new(executable);
+    if let Some(directory) = executable.parent() {
         command.current_dir(directory);
     }
-    apply_proxy_settings(&mut command, &path, proxy)
+    command.args(arguments);
+    apply_proxy_settings(&mut command, executable, proxy)
         .spawn()
-        .map_err(|error| format!("could not start {}: {error}", path.display()))?;
-    Ok(())
+        .map(|child| child.id())
+        .map_err(|error| format!("could not start {}: {error}", executable.display()))
 }
 
 fn apply_proxy_settings<'a>(

@@ -162,32 +162,32 @@ impl AppWatch {
         Frame::new()
             .fill(PANEL)
             .stroke(Stroke::new(1.0, LINE))
-            .corner_radius(CornerRadius::same(8))
-            .inner_margin(Margin::same(14))
+            .corner_radius(CornerRadius::same(6))
+            .inner_margin(Margin::same(16))
     }
 
     fn sidebar(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("AW")
-                    .font(bold_font(19.0))
-                    .strong()
-                    .color(BG)
-                    .background_color(ACCENT),
-            );
+            Frame::new()
+                .fill(ACCENT)
+                .corner_radius(CornerRadius::same(3))
+                .inner_margin(Margin::symmetric(6, 5))
+                .show(ui, |ui| {
+                    ui.label(RichText::new("AW").font(bold_font(17.0)).strong().color(BG));
+                });
             ui.vertical(|ui| {
                 ui.label(
-                    RichText::new("APPWATCH")
-                        .font(bold_font(17.0))
+                    RichText::new("AppWatch")
+                        .font(bold_font(16.0))
                         .strong()
                         .color(TEXT),
                 );
-                ui.label(RichText::new("NETWORK OBSERVER").size(9.0).color(DIM));
+                ui.label(RichText::new("Network observer").size(9.5).color(DIM));
             });
         });
-        ui.add_space(24.0);
-        section_label(ui, "PROGRAMMES");
+        ui.add_space(26.0);
+        section_label(ui, "Network scope");
         let application_count = self
             .processes
             .iter()
@@ -261,10 +261,10 @@ impl AppWatch {
                 DANGER.gamma_multiply(0.55)
             };
             Frame::new()
-                .fill(PANEL_ALT)
+                .fill(SURFACE)
                 .stroke(Stroke::new(1.0, widget_stroke))
-                .corner_radius(CornerRadius::same(6))
-                .inner_margin(Margin::same(10))
+                .corner_radius(CornerRadius::same(5))
+                .inner_margin(Margin::same(11))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
@@ -278,17 +278,21 @@ impl AppWatch {
                         );
                         ui.label(
                             RichText::new(if self.capture_error.is_none() {
-                                "CAPTURE ONLINE"
+                                "Capture ready"
                             } else {
-                                "CAPTURE OFFLINE"
+                                "Capture offline"
                             })
-                            .font(bold_font(10.0))
-                            .color(MUTED)
+                            .font(bold_font(10.5))
+                            .color(if self.capture_error.is_none() {
+                                TEXT
+                            } else {
+                                DANGER
+                            })
                             .strong(),
                         );
                     });
                     ui.label(
-                        RichText::new("WinDivert · local session")
+                        RichText::new("WinDivert / local device")
                             .color(DIM)
                             .size(10.0),
                     );
@@ -300,14 +304,14 @@ impl AppWatch {
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.label(
-                    RichText::new("LIVE TRAFFIC")
-                        .font(bold_font(10.0))
+                    RichText::new("Live traffic")
+                        .font(bold_font(10.5))
                         .color(ACCENT)
                         .strong(),
                 );
                 ui.label(
                     RichText::new(self.selected_process_name())
-                        .font(bold_font(23.0))
+                        .font(bold_font(22.0))
                         .color(TEXT)
                         .strong(),
                 );
@@ -364,19 +368,19 @@ impl AppWatch {
                 }
                 let (timer_text, timer_color, pill_fill, pill_stroke) = if self.recording {
                     (
-                        format!("●  {}", format_time(self.session_seconds)),
-                        DANGER,
-                        Color32::from_rgba_unmultiplied(255, 107, 138, 18),
-                        DANGER.gamma_multiply(0.45),
+                        format!("●  Live  {}", format_time(self.session_seconds)),
+                        ACCENT,
+                        Color32::from_rgba_unmultiplied(101, 217, 255, 14),
+                        ACCENT.gamma_multiply(0.5),
                     )
                 } else {
-                    ("■  PAUSED".to_string(), DIM, Color32::TRANSPARENT, LINE)
+                    ("■  Paused".to_string(), DIM, Color32::TRANSPARENT, LINE_SOFT)
                 };
                 Frame::new()
                     .fill(pill_fill)
                     .stroke(Stroke::new(1.0, pill_stroke))
-                    .corner_radius(CornerRadius::same(5))
-                    .inner_margin(Margin::symmetric(8, 5))
+                    .corner_radius(CornerRadius::same(4))
+                    .inner_margin(Margin::symmetric(10, 6))
                     .show(ui, |ui| {
                         ui.label(
                             RichText::new(timer_text)
@@ -413,58 +417,67 @@ impl AppWatch {
         } else {
             format!("{} ms", duration_total / duration_count)
         };
-        let cards = [
-            ("ACTIVE", visible.len().to_string(), ACCENT),
-            ("HTTP REQUESTS", http_count.to_string(), SUCCESS),
-            ("PACKETS", packets.to_string(), ACCENT_2),
-            ("UPLOADED", sent, WARNING),
-            ("DOWNLOADED", received, ACCENT),
-            ("HOSTS", hosts.to_string(), SUCCESS),
-            ("AVG RESPONSE", average, ACCENT_2),
+        let metrics = [
+            ("Visible events", visible.len().to_string(), ACCENT),
+            ("HTTP requests", http_count.to_string(), SUCCESS),
+            ("Packets", packets.to_string(), ACCENT_2),
+            ("Uploaded", sent, WARNING),
+            ("Downloaded", received, ACCENT),
+            ("Hosts", hosts.to_string(), SUCCESS),
+            ("Average response", average, ACCENT_2),
         ];
+        let metric_count = metrics.len();
 
-        ui.columns(cards.len(), |columns| {
-            for (column, (label, value, colour)) in columns.iter_mut().zip(cards) {
-                let card = Frame::new()
-                    .fill(PANEL)
-                    .stroke(Stroke::new(1.0, LINE))
-                    .corner_radius(CornerRadius::same(6))
-                    .inner_margin(Margin::symmetric(10, 9))
-                    .show(column, |ui| {
-                        ui.label(
+        let telemetry = Frame::new()
+            .fill(SURFACE)
+            .stroke(Stroke::new(1.0, LINE))
+            .corner_radius(CornerRadius::same(5))
+            .inner_margin(Margin::symmetric(14, 10))
+            .show(ui, |ui| {
+                ui.columns(metric_count, |columns| {
+                    for (column, (label, value, colour)) in columns.iter_mut().zip(metrics) {
+                        column.label(
                             RichText::new(label)
-                                .font(bold_font(9.0))
+                                .font(bold_font(9.5))
                                 .color(DIM)
                                 .strong(),
                         );
-                        ui.label(
+                        column.label(
                             RichText::new(value)
-                                .font(bold_font(17.0))
+                                .font(bold_font(16.0))
                                 .color(colour)
                                 .strong(),
                         );
-                    });
-                let rect = card.response.rect;
-                let stripe = egui::Rect::from_min_size(
-                    egui::pos2(rect.min.x + 1.0, rect.min.y + 1.0),
-                    egui::vec2(rect.width() - 2.0, 2.0),
-                );
-                column
-                    .painter()
-                    .rect_filled(stripe, CornerRadius::same(0), colour);
-            }
-        });
+                    }
+                });
+            });
+        let rect = telemetry.response.rect;
+        ui.painter().rect_filled(
+            egui::Rect::from_min_max(rect.min, egui::pos2(rect.min.x + 3.0, rect.max.y)),
+            CornerRadius::same(2),
+            if self.recording { ACCENT } else { DIM },
+        );
+        for index in 1..metric_count {
+            let x = rect.left() + 14.0 + (rect.width() - 28.0) * index as f32 / metric_count as f32;
+            ui.painter().line_segment(
+                [
+                    egui::pos2(x, rect.top() + 10.0),
+                    egui::pos2(x, rect.bottom() - 10.0),
+                ],
+                Stroke::new(1.0, LINE_SOFT),
+            );
+        }
     }
 
     fn filter_bar(&mut self, ui: &mut egui::Ui, visible_count: usize) {
         ui.horizontal(|ui| {
             ui.label(
-                RichText::new("TRAFFIC VIEW")
-                    .font(bold_font(9.0))
+                RichText::new("Traffic view")
+                    .font(bold_font(9.5))
                     .color(DIM)
                     .strong(),
             );
-            for (https_only, label) in [(false, "ALL TRAFFIC"), (true, "HTTPS REQUESTS")] {
+            for (https_only, label) in [(false, "All traffic"), (true, "HTTPS requests")] {
                 if ui
                     .selectable_label(
                         self.https_only == https_only,
@@ -485,12 +498,12 @@ impl AppWatch {
         });
         ui.horizontal(|ui| {
             ui.label(
-                RichText::new("FINGERPRINTS")
-                    .font(bold_font(9.0))
+                RichText::new("Fingerprints")
+                    .font(bold_font(9.5))
                     .color(DIM)
                     .strong(),
             );
-            for (show, label) in [(true, "SHOW ALL"), (false, "HIDE DIFFERENCES")] {
+            for (show, label) in [(true, "Show all"), (false, "Hide differences")] {
                 if ui
                     .selectable_label(
                         self.show_ja4_differences == show,
@@ -567,7 +580,9 @@ impl AppWatch {
     }
 
     fn event_table(&mut self, ui: &mut egui::Ui, visible: &[usize]) {
-        let widths = [70.0, 155.0, 245.0, 62.0, 120.0, 72.0, 78.0, 58.0];
+        let content_width = (ui.available_width() - 72.0).max(640.0);
+        let widths = [0.08, 0.18, 0.27, 0.08, 0.11, 0.09, 0.10, 0.09]
+            .map(|fraction| content_width * fraction);
         let headings = [
             "METHOD", "HOST", "PATH", "STATUS", "PROTOCOL", "SENT", "RECEIVED", "TIME",
         ];
@@ -717,27 +732,27 @@ impl AppWatch {
                 ui.add_space(24.0);
                 let (heading, body) = if !self.recording && self.events.is_empty() {
                     (
-                        "PAUSED",
+                        "Recording paused",
                         "Press Start recording to begin capturing traffic.",
                     )
                 } else if self.events.is_empty() {
                     (
-                        "WAITING FOR TRAFFIC",
+                        "Waiting for traffic",
                         "Network events will appear here automatically.",
                     )
                 } else if !self.filter.is_empty() {
                     (
-                        "NO MATCHES",
+                        "No matching events",
                         "Clear or adjust the filter to see more results.",
                     )
                 } else if !self.show_ja4_differences {
                     (
-                        "DIFFERENCES HIDDEN",
+                        "Fingerprint differences hidden",
                         "Switch fingerprints to Show all to include JA4 differences.",
                     )
                 } else {
                     (
-                        "NO TRAFFIC",
+                        "No traffic for this scope",
                         "Select another process or switch the traffic view.",
                     )
                 };
@@ -765,9 +780,9 @@ impl AppWatch {
                 ui.vertical_centered(|ui| {
                     ui.add_space(34.0);
                     ui.label(
-                        RichText::new("SELECT AN EVENT")
-                            .font(bold_font(12.0))
-                            .color(DIM)
+                        RichText::new("Select an event")
+                            .font(bold_font(13.0))
+                            .color(ACCENT_2)
                             .strong(),
                     );
                     ui.label(
@@ -1026,15 +1041,21 @@ impl eframe::App for AppWatch {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::Panel::left("processes")
-            .exact_size(220.0)
-            .frame(Frame::new().fill(PANEL_ALT).inner_margin(Margin::same(14)))
+            .exact_size(232.0)
+            .frame(
+                Frame::new()
+                    .fill(PANEL_ALT)
+                    .stroke(Stroke::new(1.0, LINE_SOFT))
+                    .inner_margin(Margin::same(14)),
+            )
             .show(ui, |ui| self.sidebar(ui));
 
         egui::Panel::top("top_bar")
             .frame(
                 Frame::new()
                     .fill(BG)
-                    .inner_margin(Margin::symmetric(18, 14)),
+                    .stroke(Stroke::new(1.0, LINE_SOFT))
+                    .inner_margin(Margin::symmetric(18, 13)),
             )
             .show(ui, |ui| self.top_bar(ui));
 
@@ -1043,29 +1064,43 @@ impl eframe::App for AppWatch {
             .show(ui, |ui| {
                 let visible = self.visible_event_indices();
                 self.stats(ui, &visible);
-                ui.add_space(10.0);
+                ui.add_space(12.0);
                 Self::panel().show(ui, |ui| {
                     self.filter_bar(ui, visible.len());
-                    ui.add_space(8.0);
+                    ui.add_space(10.0);
                     self.event_table(ui, &visible);
                 });
-                ui.add_space(10.0);
+                ui.add_space(12.0);
                 self.details(ui);
 
                 if let Some(message) = self.toast.clone() {
                     ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("i").color(ACCENT).strong());
-                        ui.label(RichText::new(message).size(10.0).color(MUTED));
-                        if ui.small_button("Dismiss").clicked() {
-                            self.toast = None;
-                            self.toast_at = None;
-                        }
-                    });
+                    Frame::new()
+                        .fill(SURFACE)
+                        .stroke(Stroke::new(1.0, LINE_SOFT))
+                        .corner_radius(CornerRadius::same(4))
+                        .inner_margin(Margin::symmetric(10, 7))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new("i").color(ACCENT).strong());
+                                ui.label(RichText::new(message).size(10.0).color(MUTED));
+                                if ui.small_button("Dismiss").clicked() {
+                                    self.toast = None;
+                                    self.toast_at = None;
+                                }
+                            });
+                        });
                 }
                 if let Some(error) = &self.capture_error {
                     ui.add_space(8.0);
-                    ui.label(RichText::new(error).size(10.0).color(DANGER));
+                    Frame::new()
+                        .fill(Color32::from_rgba_unmultiplied(255, 107, 138, 12))
+                        .stroke(Stroke::new(1.0, DANGER.gamma_multiply(0.45)))
+                        .corner_radius(CornerRadius::same(4))
+                        .inner_margin(Margin::symmetric(10, 7))
+                        .show(ui, |ui| {
+                            ui.label(RichText::new(error).size(10.0).color(DANGER));
+                        });
                 }
             });
         self.relaunch_confirmation(ui.ctx());

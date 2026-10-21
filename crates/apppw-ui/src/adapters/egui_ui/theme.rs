@@ -9,7 +9,10 @@ const BOLD_FAMILY: &str = "Consolas Bold";
 pub(super) const BG: Color32 = Color32::from_rgb(7, 11, 22);
 pub(super) const PANEL: Color32 = Color32::from_rgb(14, 20, 37);
 pub(super) const PANEL_ALT: Color32 = Color32::from_rgb(10, 17, 32);
+pub(super) const SURFACE: Color32 = Color32::from_rgb(12, 19, 35);
+pub(super) const SURFACE_HOVER: Color32 = Color32::from_rgb(17, 36, 57);
 pub(super) const LINE: Color32 = Color32::from_rgb(38, 59, 104);
+pub(super) const LINE_SOFT: Color32 = Color32::from_rgb(25, 40, 70);
 pub(super) const TEXT: Color32 = Color32::from_rgb(237, 247, 255);
 pub(super) const MUTED: Color32 = Color32::from_rgb(169, 182, 203);
 pub(super) const DIM: Color32 = Color32::from_rgb(114, 129, 159);
@@ -27,24 +30,26 @@ pub(super) fn apply_theme(context: &egui::Context) {
     style.visuals.panel_fill = BG;
     style.visuals.window_fill = PANEL;
     style.visuals.extreme_bg_color = PANEL_ALT;
-    style.visuals.faint_bg_color = Color32::from_rgb(18, 29, 51);
+    style.visuals.faint_bg_color = SURFACE;
     style.visuals.selection.bg_fill = Color32::from_rgb(20, 61, 86);
     style.visuals.selection.stroke = Stroke::new(1.0, ACCENT);
     style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, MUTED);
-    style.visuals.widgets.inactive.bg_fill = PANEL;
-    style.visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, LINE);
-    style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(19, 44, 68);
+    style.visuals.widgets.inactive.bg_fill = SURFACE;
+    style.visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, LINE_SOFT);
+    style.visuals.widgets.hovered.bg_fill = SURFACE_HOVER;
     style.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, ACCENT);
     style.visuals.widgets.active.bg_fill = Color32::from_rgb(25, 65, 88);
     style.visuals.widgets.active.bg_stroke = Stroke::new(1.0, ACCENT);
     style.spacing.item_spacing = Vec2::new(8.0, 7.0);
+    style.spacing.button_padding = Vec2::new(10.0, 6.0);
+    style.spacing.interact_size.y = 28.0;
     style.text_styles.insert(
         egui::TextStyle::Body,
         FontId::new(12.0, FontFamily::Monospace),
     );
     style.text_styles.insert(
         egui::TextStyle::Button,
-        FontId::new(11.0, FontFamily::Monospace),
+        FontId::new(10.5, FontFamily::Monospace),
     );
     style.text_styles.insert(
         egui::TextStyle::Monospace,
