@@ -130,6 +130,6 @@ generated certificates and cannot be inspected through this proxy.
 ```powershell
 git clone https://github.com/bivorzk/AppProcessWatcher.git
 cd AppProcessWatcher
-cargo build --release
+cargo build --release -p apppw-ui
 cargo run --release -p apppw-ui
 ```
